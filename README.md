@@ -12,7 +12,7 @@ This repository contains the database configurations, SQL logic, and synchroniza
 
 * qgis_templates/: Pre-configured QGIS project files (.qgs) optimized for desktop analysis and mobile packaging.
 
-* web/: CesiumJS integration files, including HTML/JavaScript for the web-based 3D visualization.
+* cesium_web/: CesiumJS integration files, including HTML/JavaScript for the web-based 3D visualization.
 
 * media/: Storage for field-captured photographic evidence and external URLs for the web viewer.
 
