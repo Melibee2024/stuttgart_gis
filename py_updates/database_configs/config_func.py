@@ -1,7 +1,7 @@
 from psycopg2 import connect
 from psycopg2.extras import DictCursor
-# This imports your dictionary from the other file
-from database_configs.local_config_database import DB_HFT
+# This imports your dictionary
+from .local_config_database import DB_HFT
 
 def database_connector(database_info_dic):
     """Establishes a connection to the PostGIS database."""
