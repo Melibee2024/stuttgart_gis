@@ -1,0 +1,22 @@
+# Python Virtual Environment (The heavy folder)
+.venv/
+__pycache__/
+*.py[cod]
+
+# PyCharm Settings (Individual laptop configs)
+.idea/
+*.iml
+
+# Sensitive Data & Credentials
+.env
+
+# Large Spatial Data (Keep database local)
+*.zip
+*.gpkg
+*.tif
+*.las
+media/img/*
+
+# QGIS Backup files
+*.qgs~
+*.qgz~
