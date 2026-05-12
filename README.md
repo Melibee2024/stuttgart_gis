@@ -9,14 +9,14 @@ This repository contains the database configurations, SQL logic, and synchroniza
   * `views/`: Triple-schema joins linking 3D, 2D, and field data.
 
 * py_updates/: Python-based automation for data processing and database maintenance.
+  
+  * `database_configs/`: Connection parameters and metadata for secure database access.
 
 * qgis_templates/: Pre-configured QGIS project files (.qgs) optimized for desktop analysis and mobile packaging.
 
 * cesium_web/: CesiumJS integration files, including HTML/JavaScript for the web-based 3D visualization.
 
 * media/: Storage for field-captured photographic evidence and external URLs for the web viewer.
-
-* database_configs/: Metadata and session configurations for PyCharm Professional database tools.
 
 ## General Logic & Workflow
 1. Environment Setup: Implementation of a PostGIS-enabled database with dedicated schemas for 2D, 3D, and field data. The 2D schema is initialized via norGIS ALKIS import (gid7) and the 3D schema via 3DCityDB.
