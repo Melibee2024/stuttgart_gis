@@ -1,4 +1,5 @@
 CREATE SCHEMA IF NOT EXISTS qfield_data;
+-- I forgot to add the photo_name field!! but i did it in pgadmin :)
 
 -- Create the physical table for photos and GPS camera points
 CREATE TABLE IF NOT EXISTS qfield_data.building_photos (
