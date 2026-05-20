@@ -26,3 +26,7 @@ cesium_web/Cesium/
 
 # Optional: Ignore local data payloads if they are massive or auto-generated
 cesium_web/buildings.geojson.json
+
+# Other files to ignore
+stuttgart-backend/node_modules/
+stuttgart-digital-twin/node_modules/
