@@ -4,9 +4,11 @@
     <meta charset="UTF-8">
     <title>HFT Stuttgart Campus - Digital Twin</title>
 
-    <script src="./Cesium/Cesium.js"></script>
-    <link href="./Cesium/Widgets/widgets.css" rel="stylesheet">
+    <!-- REPLACED LOCAL PATHS WITH OFFICIAL CESIUM CDN LINKS -->
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js"></script>
 
+    <!-- Kept local for your coordinate projections -->
     <script src="./proj4.js"></script>
 
     <style>
@@ -64,7 +66,7 @@
             })),
             terrainProvider: undefined,
             baseLayerPicker: false,
-            infoBox: false // <--- Clean fix to stop the default popup overlap!
+            infoBox: false
         });
 
         // Points straight to your local filename asset
@@ -77,7 +79,6 @@
         }).then(function(dataSource) {
             viewer.dataSources.add(dataSource);
 
-            // Run structural styling loop for your surveyed targets
             const entities = dataSource.entities.values;
             for (let i = 0; i < entities.length; i++) {
                 const entity = entities[i];
@@ -87,22 +88,15 @@
                     const data = typeof props === 'string' ? JSON.parse(props) : props;
 
                     // --- TRUE 3D CITYDB HEIGHT LOGIC ---
-                    // Pull the exact double-precision survey height from your database table
-                    let realHeight = data.measured_height || 10.0; // Fallback to 10m only if a record is missing it
+                    let realHeight = data.measured_height || 10.0;
 
-                    // Force Cesium to render the polygon as a 3D block
                     if (entity.polygon) {
                         entity.polygon.extrudedHeight = realHeight;
-
-                        // Keep the polygon flush and un-clamped from terrain artifacts
                         entity.polygon.perPositionHeight = false;
-
-                        // Default color for standard campus buildings
                         entity.polygon.material = Cesium.Color.CORNFLOWERBLUE.withAlpha(0.7);
                         entity.polygon.outlineColor = Cesium.Color.DODGERBLUE;
                         entity.polygon.outlineWidth = 1;
 
-                        // Highlight surveyed field photo targets bright green!
                         if (data && data.photo_count > 0) {
                             entity.polygon.material = Cesium.Color.SPRINGGREEN.withAlpha(0.85);
                             entity.polygon.outlineColor = Cesium.Color.CHARTREUSE;
@@ -112,10 +106,8 @@
                 }
             }
 
-            // CRITICAL FIX: Force the 3D globe to fly directly down and center onto the boundary box of your data!
             viewer.zoomTo(dataSource);
 
-            // Interactive UI Click Handler for the sidebar photo layout
             const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
             handler.setInputAction(function(click) {
                 const pickedObject = viewer.scene.pick(click.position);
@@ -134,9 +126,6 @@
                     if (data.photo_count > 0 && data.photo_gallery) {
                             data.photo_gallery.forEach(path => {
                                 const img = document.createElement('img');
-
-                                // Clean up the path: if it contains "DCIM/", strip it out
-                                // so it correctly reads directly from your local folder directory
                                 let cleanPath = path.replace(/^DCIM\//, '');
 
                                 img.src = 'http://localhost:8000/' + cleanPath;
