@@ -1,14 +1,14 @@
 import sys
 import os
 
-# 1. CRITICAL: Move the path adjustment to the ABSOLUTE TOP
+# 1. Move the path adjustment to the ABSOLUTE TOP
 # This tells Python to look in the parent 'planung' folder first
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-# 2. Now import your psycopg2 module
+# 2. Import psycopg2 module
 from psycopg2 import sql
 
-# 3. Finally, import your custom modules (Python will now find them!)
+# 3. Import your custom modules
 from config_func import database_connector
 from local_config_database import DB_HFT
 
