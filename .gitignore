@@ -28,5 +28,5 @@ cesium_web/Cesium/
 cesium_web/buildings.geojson.json
 
 # Other files to ignore
-stuttgart-backend/node_modules/
-stuttgart-digital-twin/node_modules/
+cesium_web/stuttgart-backend/node_modules/
+cesium_web/stuttgart-digital-twin/node_modules/
