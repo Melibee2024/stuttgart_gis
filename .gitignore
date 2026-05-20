@@ -20,3 +20,6 @@ media/img/*
 # QGIS Backup files
 *.qgs~
 *.qgz~
+# Other files to ignore
+stuttgart-backend/node_modules/
+stuttgart-digital-twin/node_modules/
