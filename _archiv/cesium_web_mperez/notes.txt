@@ -1,0 +1,7 @@
+Notes on how to open cesium
+
+Command Prompt:
+python -m http.server 8000
+
+Edge browser:
+http://localhost:8000/index.html

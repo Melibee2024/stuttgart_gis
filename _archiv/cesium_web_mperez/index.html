@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>HFT Stuttgart Campus - Digital Twin</title>
+
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js"></script>
+
+    <script src="./proj4.js"></script>
+
+    <style>
+        html, body, #cesiumContainer { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+
+        /* Professional Sidebar Layout placed on the Left side */
+        #galleryPanel {
+            position: absolute; top: 0; left: 0; width: 340px; height: 100%;
+            background: rgba(30, 30, 30, 0.95); color: #f0f0f0; padding: 25px 20px;
+            box-sizing: border-box; box-shadow: 4px 0 15px rgba(0,0,0,0.5);
+            display: none; z-index: 1000; overflow-y: auto; border-right: 3px solid #00ff7f;
+        }
+        #galleryPanel h3 { margin-top: 0; color: #00ff7f; font-size: 1.4rem; border-bottom: 1px solid #444; padding-bottom: 10px; }
+        #galleryPanel p { font-size: 0.95rem; line-height: 1.5; color: #ccc; margin: 12px 0; }
+        #galleryPanel strong { color: #fff; }
+
+        /* Beautifully arranged survey images */
+        .gallery-img { width: 100%; height: auto; margin-top: 12px; border-radius: 6px; border: 2px solid #444; transition: transform 0.2s; }
+        .gallery-img:hover { transform: scale(1.02); border-color: #00ff7f; }
+
+        .close-btn { margin-top: 25px; width: 100%; padding: 10px; background: #444; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .close-btn:hover { background: #555; }
+    </style>
+</head>
+<body>
+
+    <div id="cesiumContainer"></div>
+
+    <div id="galleryPanel">
+        <h3>Building Info</h3>
+        <p><strong>ALKIS ID:</strong> <span id="panelAlkisId">N/A</span></p>
+        <p><strong>Function Code:</strong> <span id="panelFunction">N/A</span></p>
+        <p><strong>Photos Collected:</strong> <span id="panelPhotoCount">0</span></p>
+        <div id="photoContainer"></div>
+
+        <button class="close-btn" onclick="document.getElementById('galleryPanel').style.display='none'">Close</button>
+    </div>
+
+    <script>
+        // Teaches the browser the exact definition for UTM Zone 32N (EPSG:25832)
+        proj4.defs("EPSG:25832","+proj=utm +zone=32 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs +type=crs");
+
+        // Link Proj4 into Cesium's internal geometry processing engine
+        Cesium.GeoJsonDataSource.crsNames['urn:ogc:def:crs:EPSG::25832'] = function(coordinates) {
+            const firstProjection = proj4('EPSG:25832');
+            const secondProjection = proj4('EPSG:4326'); // Standard WGS84
+            const convertedCoordinates = proj4(firstProjection, secondProjection, coordinates);
+            return Cesium.Cartesian3.fromDegrees(convertedCoordinates[0], convertedCoordinates[1]);
+        };
+
+        // Initialize the Viewer
+        const viewer = new Cesium.Viewer('cesiumContainer', {
+            baseLayer: new Cesium.ImageryLayer(new Cesium.UrlTemplateImageryProvider({
+                url: 'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png'
+            })),
+            terrainProvider: undefined,
+            baseLayerPicker: false,
+            infoBox: false
+        });
+
+        // Define path to local geojson
+        const localGeoJsonPath = './buildings.geojson.json';
+
+        // Load dataset and render 3D elements
+        Cesium.GeoJsonDataSource.load(localGeoJsonPath, {
+            stroke: Cesium.Color.DODGERBLUE,
+            fill: Cesium.Color.CORNFLOWERBLUE.withAlpha(0.4),
+            strokeWidth: 2
+        }).then(function(dataSource) {
+            viewer.dataSources.add(dataSource);
+
+            const entities = dataSource.entities.values;
+            for (let i = 0; i < entities.length; i++) {
+                const entity = entities[i];
+
+                if (entity.properties && entity.properties.building_properties_json) {
+                    const props = entity.properties.building_properties_json.getValue();
+                    const data = typeof props === 'string' ? JSON.parse(props) : props;
+
+                    // --- TRUE 3D CITYDB HEIGHT LOGIC ---
+                    let realHeight = data.measured_height || 10.0;
+
+                    if (entity.polygon) {
+                        entity.polygon.extrudedHeight = realHeight;
+                        entity.polygon.perPositionHeight = false;
+                        entity.polygon.material = Cesium.Color.CORNFLOWERBLUE.withAlpha(0.7);
+                        entity.polygon.outlineColor = Cesium.Color.DODGERBLUE;
+                        entity.polygon.outlineWidth = 1;
+
+                        if (data && data.photo_count > 0) {
+                            entity.polygon.material = Cesium.Color.SPRINGGREEN.withAlpha(0.85);
+                            entity.polygon.outlineColor = Cesium.Color.CHARTREUSE;
+                            entity.polygon.outlineWidth = 2;
+                        }
+                    }
+                }
+            }
+
+            // DYNAMIC CAMERA PROFILE FIX: Prevents cropping and lets you view the extruded heights cleanly
+            viewer.zoomTo(dataSource, new Cesium.HeadingPitchRange(
+                Cesium.Math.toRadians(0),    // Heading: Face straight North
+                Cesium.Math.toRadians(-45),  // Pitch: Tilt down 45 degrees
+                450.0                        // Range: Camera distance in meters
+            ));
+
+            // Interactive UI Click Handler for the sidebar photo layout
+            const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+            handler.setInputAction(function(click) {
+                const pickedObject = viewer.scene.pick(click.position);
+
+                if (Cesium.defined(pickedObject) && Cesium.defined(pickedObject.id)) {
+                    const props = pickedObject.id.properties.building_properties_json.getValue();
+                    const data = typeof props === 'string' ? JSON.parse(props) : props;
+
+                    document.getElementById('panelAlkisId').innerText = data.alkis_id;
+                    document.getElementById('panelFunction').innerText = data.gebaeudefunktion;
+                    document.getElementById('panelPhotoCount').innerText = data.photo_count;
+
+                    const imgContainer = document.getElementById('photoContainer');
+                    imgContainer.innerHTML = '';
+
+                    if (data.photo_count > 0 && data.photo_gallery) {
+                        data.photo_gallery.forEach(path => {
+                            const img = document.createElement('img');
+
+                            // Strip out any DCIM/ prefix from your database payload strings
+                            let fileName = path.replace(/^DCIM\//, '');
+
+                            // Point directly to your active local server symlink asset directory
+                            img.src = 'http://localhost:8000/building_photos/' + fileName;
+                            img.className = 'gallery-img';
+                            img.alt = "Field Survey Capture";
+                            imgContainer.appendChild(img);
+                        });
+                    } else {
+                        imgContainer.innerHTML = '<p style="color:#aaa; font-style:italic;">No survey assets captured yet for this structure.</p>';
+                    }
+
+                    document.getElementById('galleryPanel').style.display = 'block';
+                }
+            }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+        }).catch(function(err) {
+            console.error("Local file read issue:", err);
+        });
+    </script>
+</body>
+</html>
