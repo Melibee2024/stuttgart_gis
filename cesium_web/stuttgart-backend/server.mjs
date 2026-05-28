@@ -29,7 +29,7 @@ app.get('/api/buildings/:gmlid', async (req, res) => {
         SELECT 
             v.gmlid,
             v.alkis_usage,
-            v.alkis_year_built,
+            v.alkis_year_built,pg
             v.qfield_condition,
             p.file_path,
             p.notes AS photo_notes
