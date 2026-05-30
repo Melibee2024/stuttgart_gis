@@ -5,3 +5,18 @@ python -m http.server 8000
 
 Edge browser:
 http://localhost:8000/index.html
+
+
+SELECT
+    COUNT(DISTINCT alkis.gml_id) AS total_2d_buildings,
+    COUNT(DISTINCT b.id) AS spatially_intersecting_buildings,
+    ROUND(COUNT(DISTINCT b.id) * 100.0 / COUNT(DISTINCT alkis.gml_id), 2) || '%' AS spatial_match_rate
+FROM stuttgart_processed.ax_gebaeude_clean alkis
+LEFT JOIN citydb.surface_geometry sg
+    ON sg.geometry IS NOT NULL
+    -- ST_Transform translates the 2D map on the fly to match the 3D map projection perfectly
+    AND ST_Intersects(ST_Transform(alkis.wkb_geometry, ST_SRID(sg.geometry)), sg.geometry)
+LEFT JOIN citydb.building b
+    ON sg.root_id = b.lod2_multi_surface_id;
+
+    
