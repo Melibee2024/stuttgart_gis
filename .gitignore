@@ -20,8 +20,11 @@ media/img/*
 # QGIS Backup files
 *.qgs~
 *.qgz~
-# Other files to ignore
-stuttgart-backend/node_modules/
-stuttgart-digital-twin/node_modules/
-IFCGeoreferencing/HFT_Bau4_2025.04.22.ifc
-IFCGeoreferencing/HFT_Bau4_2025.04.22_georef.ifc
+# Dependencies
+node_modules/
+.env
+
+# Build/IDE files
+.venv/
+*.pyc
+__pycache__/
