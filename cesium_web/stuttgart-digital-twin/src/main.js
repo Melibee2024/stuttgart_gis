@@ -103,14 +103,36 @@ viewer.screenSpaceEventHandler.setInputAction(async function (movement) {
     Cesium.Color.clone(pickedFeature.color, selected.originalColor);
     pickedFeature.color = Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.8);
 
-    // Checks metadata for whatever unique ID structure your 3D Tiles exporter baked out
-    const activeId = pickedFeature.getProperty("gml_id") || pickedFeature.getProperty("id") || pickedFeature.getProperty("OBJECTID");
+    // ---------------------------------------------------------------
+    // 🔍 DEBUG: Log every property baked into this tile feature.
+    //    Open browser DevTools (F12) → Console tab, click a building,
+    //    and look for the "ALL TILE PROPERTIES" line to find the real key name.
+    //    Once identified, remove this block and hard-code the correct key below.
+    // ---------------------------------------------------------------
+    const propertyIds = pickedFeature.getPropertyIds();
+    console.log("🔍 ALL TILE PROPERTIES for clicked feature:");
+    if (propertyIds.length === 0) {
+        console.warn("   ⚠️  No properties found at all — tile may have no metadata.");
+    } else {
+        propertyIds.forEach(id => {
+            console.log(`   ${id} =`, pickedFeature.getProperty(id));
+        });
+    }
+    // ---------------------------------------------------------------
+
+    // Tries the most common 3DCityDB export key names — the console log above
+    // will tell you the exact correct name if none of these match.
+    const activeId = pickedFeature.getProperty("gml_id")
+                  || pickedFeature.getProperty("id")
+                  || pickedFeature.getProperty("cityobject_id")
+                  || pickedFeature.getProperty("OBJECTID")
+                  || pickedFeature.getProperty("building_id");
 
     rightSidebar.classList.add('active');
 
     if (!activeId) {
         alkisTableBody.innerHTML = '<tr><td colspan="2" style="color:#ef4444;">No metadata key identifier found in 3D Tile.</td></tr>';
-        qfieldDataContainer.innerHTML = '<p style="color:#ef4444;">Cannot perform database queries without a target feature ID key.</p>';
+        qfieldDataContainer.innerHTML = '<p style="color:#ef4444;">Cannot perform database queries without a target feature ID key. Check the browser console (F12) for a list of available property names.</p>';
         return;
     }
 
