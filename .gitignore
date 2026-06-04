@@ -1,32 +1,88 @@
-# Python Virtual Environment (The heavy folder)
+# =========================
+# Python Virtual Environment
+# =========================
 .venv/
 __pycache__/
 *.py[cod]
 
-# PyCharm Settings (Individual laptop configs)
+# =========================
+# IDE / Editor files
+# =========================
 .idea/
 *.iml
+.vscode/
 
-# Sensitive Data & Credentials
+# =========================
+# Environment / Secrets
+# =========================
 .env
+*.env
 
-# Large Spatial Data (Keep database local)
+# =========================
+# Python caches / logs
+# =========================
+*.log
+*.sqlite3
+
+# =========================
+# GIS RAW DATA (IMPORTANT - prevents your issue)
+# =========================
+*.gml
 *.zip
 *.gpkg
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
 *.tif
+*.tiff
 *.las
-media/img/*
+*.laz
 
-# QGIS Backup files
-*.qgs~
-*.qgz~
+# =========================
+# Cesium / 3D Tiles / Digital Twin outputs
+# =========================
+*.pnts
+*.b3dm
+*.i3dm
+*.cmpt
+*.terrain
+*.ktx2
 
-# Ignore the local Cesium build files
+cesium_web/stuttgart-digital-twin/public/tileset/
+cesium_web/**/tileset/
+cesium_web/**/build/
+cesium_web/**/dist/
+cesium_web/**/.cache/
+
+# Cesium library (already correct but extended safety)
 cesium_web/Cesium/
 
-# Optional: Ignore local data payloads if they are massive or auto-generated
-cesium_web/buildings.geojson.json
+# =========================
+# Node dependencies
+# =========================
+node_modules/
+cesium_web/**/node_modules/
 
-# Other files to ignore#
-cesium_web/stuttgart-backend/node_modules/
-cesium_web/stuttgart-digital-twin/node_modules/
+# =========================
+# QGIS / GIS project temp files
+# =========================
+*.qgs~
+*.qgz~
+*.mxd~
+*.aux.xml
+
+# =========================
+# Auto-generated / exports
+# =========================
+cesium_web/buildings.geojson.json
+output/
+data/
+exports/
+
+# =========================
+# OS junk
+# =========================
+.DS_Store
+Thumbs.db
