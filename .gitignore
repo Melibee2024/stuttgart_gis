@@ -20,3 +20,15 @@ media/img/*
 # QGIS Backup files
 *.qgs~
 *.qgz~
+
+
+# local GIS data
+qfc_sync_data/
+web/photos/
+sync_state.json
+
+# geo outputs
+*.gpkg
+
+# IDE
+.idea/
