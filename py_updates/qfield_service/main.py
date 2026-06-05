@@ -16,6 +16,7 @@ Requirements:
 
 import time
 import shutil
+import sqlite3
 import logging
 import subprocess
 from pathlib import Path
@@ -61,47 +62,111 @@ def load_geopackages_to_postgis() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Query the GeoPackage for photos actually referenced by features
+# --------------------------------------------------------------------------- #
+def get_referenced_photos() -> set[str]:
+    """
+    Read all GeoPackages in LOCAL_DIR and return the SET of photo base-names
+    (e.g. "building-photos_20260517034209430.jpg") that are referenced in any
+    table that has a 'file_path' or 'photo_name' column.
+
+    This is the ground truth: if a photo feature was deleted in QField, it
+    will no longer appear here — even if the .jpg file still exists in
+    QFieldCloud's project files.
+    """
+    referenced: set[str] = set()
+    gpkgs = list(config.LOCAL_DIR.rglob("*.gpkg"))
+
+    for gpkg in gpkgs:
+        try:
+            con = sqlite3.connect(str(gpkg))
+            cur = con.cursor()
+
+            # Find every table that has a 'file_path' or 'photo_name' column.
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = [row[0] for row in cur.fetchall()]
+
+            for table in tables:
+                try:
+                    cur.execute(f'PRAGMA table_info("{table}")')
+                    columns = {row[1] for row in cur.fetchall()}
+                except Exception:
+                    continue
+
+                # Prefer 'file_path' (full relative path like "DCIM/foo.jpg"),
+                # fall back to 'photo_name' (bare filename).
+                if "file_path" in columns:
+                    cur.execute(
+                        f'SELECT file_path FROM "{table}" WHERE file_path IS NOT NULL AND file_path != ""'
+                    )
+                    for (val,) in cur.fetchall():
+                        referenced.add(Path(val).name)
+                elif "photo_name" in columns:
+                    cur.execute(
+                        f'SELECT photo_name FROM "{table}" WHERE photo_name IS NOT NULL AND photo_name != ""'
+                    )
+                    for (val,) in cur.fetchall():
+                        referenced.add(Path(val).name)
+
+            con.close()
+        except Exception as exc:
+            log.warning("Could not read %s for photo references: %s", gpkg.name, exc)
+
+    log.info(
+        "GeoPackage references %d photo(s) across all layers.", len(referenced)
+    )
+    return referenced
+
+
+# --------------------------------------------------------------------------- #
 # Mirror photos to the web-served folder (copy new, delete orphans)
 # --------------------------------------------------------------------------- #
-def sync_photos(remote_photo_names: list[str]) -> None:
+def sync_photos(remote_photo_names: list[str], referenced: set[str]) -> None:
     """
-    Make PHOTO_WEB_DIR an exact mirror of the cloud photos.
+    Make PHOTO_WEB_DIR an exact mirror of photos that are BOTH:
+      - present in the cloud (remote_photo_names), AND
+      - referenced by a feature in the GeoPackage (referenced).
 
-    - Copies photos that are new or changed.
-    - Deletes local photos that no longer exist in the cloud (so deleting a
-      photo in QField removes it here too).
+    Photos that exist in the cloud but are no longer attached to any feature
+    (i.e. the user deleted the feature/photo in QField) are treated as orphans
+    and removed from PHOTO_WEB_DIR.
 
-    remote_photo_names: the photo names currently in the cloud (from the
-    client), e.g. "DCIM/building-photos_2026....jpg". We compare by the file's
-    base name, since PHOTO_WEB_DIR is flat.
+    remote_photo_names : list of remote file paths, e.g. "DCIM/foo.jpg"
+    referenced         : set of base-names that appear in GeoPackage features
     """
     config.PHOTO_WEB_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Base names of the photos that SHOULD exist locally.
-    expected = {Path(name).name for name in remote_photo_names}
+    # Only keep photos that exist in the cloud AND are still referenced.
+    expected = {
+        Path(name).name
+        for name in remote_photo_names
+        if Path(name).name in referenced
+    }
 
-    # 1. Copy new/changed photos from the download dir into the web folder,
-    #    skipping any that were deleted from the cloud (not in expected).
+    # 1. Copy new/changed photos from the download dir into the web folder.
     copied = 0
     for path in config.LOCAL_DIR.rglob("*"):
         if path.is_file() and path.suffix.lower() in config.IMAGE_EXTS:
             if path.name not in expected:
-                continue  # deleted remotely; don't re-copy it
+                continue  # orphan or deleted — skip
             dest = config.PHOTO_WEB_DIR / path.name
             if not dest.exists() or dest.stat().st_size != path.stat().st_size:
                 shutil.copy2(path, dest)
                 copied += 1
 
-    # 2. Delete local photos that are no longer in the cloud (orphans).
+    # 2. Delete photos from the web folder that are no longer expected.
     removed = 0
     for dest in config.PHOTO_WEB_DIR.iterdir():
         if dest.is_file() and dest.suffix.lower() in config.IMAGE_EXTS:
             if dest.name not in expected:
                 dest.unlink()
+                log.info("Removed orphan photo from web folder: %s", dest.name)
                 removed += 1
 
     if copied or removed:
         log.info("Photos mirrored: %d copied, %d removed.", copied, removed)
+    else:
+        log.info("Photos already up to date.")
 
 
 # --------------------------------------------------------------------------- #
@@ -136,11 +201,16 @@ def main() -> None:
                     qfc.download_geometry_from_package()
                     load_geopackages_to_postgis()
 
+                    # Find which photos are actually referenced in the GeoPackage.
+                    # This is the ground truth: deleted features won't appear here.
+                    referenced = get_referenced_photos()
+
                     # Photos come from the direct project files (real ETag
                     # skipping, so unchanged photos are NOT re-downloaded).
                     remote_photos = qfc.download_photos()
-                    # Mirror them to the web folder (copies new, deletes orphans).
-                    sync_photos(remote_photos)
+
+                    # Mirror only photos that are referenced by a feature.
+                    sync_photos(remote_photos, referenced)
 
                     # Remember the state we just synced, so the next loop only
                     # reacts to genuinely new changes.

@@ -81,16 +81,50 @@ class QfcSyncClient:
 
     def ensure_fresh_package(self) -> bool:
         """
-        Trigger a 'package' job and wait until it finishes.
+        Trigger a NEW 'package' job and wait until THAT job finishes.
         Returns True if a fresh package is ready, False otherwise.
+
+        IMPORTANT: we must track the specific job we just triggered, NOT
+        package_latest(). Right after triggering, package_latest() still
+        returns the PREVIOUS package (already 'finished'), so polling it
+        would return immediately and we'd download the stale package from
+        the previous push -> the classic "always one photo behind" bug.
         """
         # Make sure all field changes are fully applied before we package,
         # otherwise the latest edit could be left out.
         self.wait_until_idle()
 
         log.info("Triggering package job ...")
-        self.client.job_trigger(config.PROJECT_ID, JobTypes.PACKAGE, force=True)
+        job = self.client.job_trigger(config.PROJECT_ID, JobTypes.PACKAGE, force=True)
+        job_id = job.get("id")
 
+        if not job_id:
+            # Fallback: no job id returned (e.g. nothing to package). Fall back
+            # to the old behaviour rather than failing outright.
+            log.warning("No job id returned from job_trigger; using package_latest fallback.")
+            return self._wait_package_latest()
+
+        log.info("Waiting for package job %s ...", job_id)
+        waited = 0
+        while waited < config.PACKAGE_TIMEOUT:
+            status = self.client.job_status(job_id)
+            state = status.get("status")
+            # QFieldCloud job states: pending / queued / started / finished /
+            # stopped / failed.
+            if state == "finished":
+                log.info("Package ready (job %s).", job_id)
+                return True
+            if state in ("failed", "stopped"):
+                log.error("Packaging job %s ended as '%s': %s", job_id, state, status)
+                return False
+            time.sleep(3)
+            waited += 3
+
+        log.warning("Timed out waiting for package job %s (%ss).", job_id, config.PACKAGE_TIMEOUT)
+        return False
+
+    def _wait_package_latest(self) -> bool:
+        """Legacy fallback: poll package_latest until finished/failed."""
         waited = 0
         while waited < config.PACKAGE_TIMEOUT:
             status = self.client.package_latest(config.PROJECT_ID)
@@ -103,7 +137,6 @@ class QfcSyncClient:
                 return False
             time.sleep(3)
             waited += 3
-
         log.warning("Timed out waiting for the package (%ss).", config.PACKAGE_TIMEOUT)
         return False
 

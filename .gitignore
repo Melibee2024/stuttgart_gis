@@ -26,6 +26,9 @@ media/img/*
 qfc_sync_data/
 qfield_service/web/photos/
 qfield_service/sync_state.json
+# same, but for the actual location under py_updates/
+py_updates/qfield_service/web/
+py_updates/qfield_service/sync_state.json
 
 # geo outputs
 *.gpkg
