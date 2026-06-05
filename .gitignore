@@ -22,10 +22,10 @@ media/img/*
 *.qgz~
 
 
-# local GIS data
+# QField / GIS data
 qfc_sync_data/
-web/photos/
-sync_state.json
+qfield_service/web/photos/
+qfield_service/sync_state.json
 
 # geo outputs
 *.gpkg

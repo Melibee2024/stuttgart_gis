@@ -11,9 +11,10 @@ know how the QFieldCloud SDK works internally.
 import sys
 import time
 import logging
+from pathlib import Path
 
 from qfieldcloud_sdk import sdk
-from qfieldcloud_sdk.sdk import JobTypes, FileTransferStatus
+from qfieldcloud_sdk.sdk import JobTypes, FileTransferStatus, FileTransferType
 
 import config
 
@@ -107,20 +108,77 @@ class QfcSyncClient:
         return False
 
     # ----------------------------------------------------------------- #
-    # Download (incremental thanks to ETags)
+    # Download
     # ----------------------------------------------------------------- #
-    def download_package(self) -> list[dict]:
+    def download_geometry_from_package(self) -> list[dict]:
         """
-        Download the latest packaged files into LOCAL_DIR.
-        The SDK compares ETags, so only changed files are actually transferred.
+        Download ONLY the GeoPackage(s) from the latest package.
+
+        Geometry must go through the package (that is how QFieldCloud builds a
+        clean .gpkg). The package is small and fast, so re-fetching it each
+        time is cheap. Photos are handled separately (see download_photos).
         """
         config.LOCAL_DIR.mkdir(parents=True, exist_ok=True)
         files = self.client.package_download(
             project_id=config.PROJECT_ID,
             local_dir=str(config.LOCAL_DIR),
-            filter_glob="*",
+            filter_glob="*.gpkg",   # geometry only; photos come via the direct path
             show_progress=False,
         )
         changed = [f for f in files if f.get("status") == FileTransferStatus.SUCCESS]
-        log.info("%d file(s) downloaded/updated.", len(changed))
+        log.info("%d GeoPackage file(s) downloaded/updated.", len(changed))
         return changed
+
+    def list_remote_photos(self) -> list[dict]:
+        """Return the list of remote PROJECT files that are images."""
+        files = self.client.list_remote_files(config.PROJECT_ID)
+        photos = [
+            f for f in files
+            if Path(f["name"]).suffix.lower() in config.IMAGE_EXTS
+        ]
+        return photos
+
+    def download_photos(self) -> list[str]:
+        """
+        Download photos directly from the PROJECT files (not the package).
+
+        Project files keep a STABLE etag/md5sum while their content does not
+        change, so the SDK's built-in ETag check truly skips photos we already
+        have locally. (The package, by contrast, regenerates etags every time,
+        which forced a full re-download of every photo.)
+
+        Returns the list of remote photo names currently in the cloud, so the
+        caller can mirror/delete local orphans.
+        """
+        config.LOCAL_DIR.mkdir(parents=True, exist_ok=True)
+        photos = self.list_remote_photos()
+
+        downloaded = 0
+        for f in photos:
+            name = f["name"]
+            local_path = config.LOCAL_DIR / name
+            etag = f.get("md5sum") or f.get("etag")
+            # download_file returns None (and writes nothing) when the local
+            # etag already matches, so unchanged photos are skipped for real.
+            resp = self.client.download_file(
+                config.PROJECT_ID,
+                FileTransferType.PROJECT,
+                local_path,
+                name,
+                False,           # show_progress
+                etag,            # remote_etag -> enables the skip-if-unchanged check
+            )
+            if resp is not None:
+                downloaded += 1
+
+        log.info("%d new/changed photo(s) downloaded (skipped the rest).", downloaded)
+
+        # Remove local copies of photos that no longer exist in the cloud.
+        remote_names = {Path(f["name"]).name for f in photos}
+        for local in config.LOCAL_DIR.rglob("*"):
+            if local.is_file() and local.suffix.lower() in config.IMAGE_EXTS:
+                if local.name not in remote_names:
+                    local.unlink()
+                    log.info("Removed deleted photo from local cache: %s", local.name)
+
+        return [f["name"] for f in photos]
