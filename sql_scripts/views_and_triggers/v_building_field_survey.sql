@@ -1,3 +1,5 @@
+DROP VIEW IF EXISTS qfield_data.v_building_field_survey;
+
 CREATE OR REPLACE VIEW qfield_data.v_building_field_survey AS
 SELECT
     b.ogc_fid,
@@ -7,9 +9,8 @@ SELECT
     -- Pulls the human-readable German text directly from your lookup table
     f.beschreibung AS gebaeudefunktion_text,
 
-    -- Dynamic area calculations
+    -- Dynamic area calculation (footprint in square metres, EPSG:25832)
     public.ST_Area(b.wkb_geometry) AS grund_flaeche,
-    public.ST_Area(b.wkb_geometry) AS area,
 
     -- Status indicators tracking progress on campus
     CASE
