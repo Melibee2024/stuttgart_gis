@@ -6,6 +6,13 @@
 // 1. INITIALIZE CESIUM VIEWER
 // =====================================================================
 
+// Use your own Cesium ion token if provided (VITE_ION_TOKEN in .env),
+// otherwise fall back to Cesium's shared default (rate-limited; shows a banner).
+// Must be set BEFORE the Viewer is created (any ion asset call needs it).
+if (import.meta.env.VITE_ION_TOKEN) {
+    Cesium.Ion.defaultAccessToken = import.meta.env.VITE_ION_TOKEN;
+}
+
 const viewer = new Cesium.Viewer("cesiumContainer", {
     baseLayerPicker: true,
     geocoder:        true,
@@ -20,7 +27,9 @@ viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(
     Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK
 );
 
-const API = 'http://localhost:5000';
+// Backend base URL. Defaults to localhost for dev; override at build time with
+// VITE_API_BASE in .env (e.g. when the frontend is served from another host).
+const API = import.meta.env.VITE_API_BASE ?? 'http://localhost:5000';
 
 // =====================================================================
 // 2. PER-CLASS COLOUR DEFINITIONS
@@ -633,7 +642,13 @@ async function initModeTools() {
     updateSunTime();   // initialise the time label
 }
 
-// ── Hide the citydb building under the IFC (clip the base tileset) ─────
+// ── citydb base visibility ────────────────────────────────────────────
+// Two independent things:
+//  1. baseClip — ALWAYS on. Clips out the one citydb LoD2 building that sits
+//     directly under the IFC (its blocky twin) so it doesn't z-fight the
+//     detailed IFC. The rest of the city stays.
+//  2. hideBaseToggle — hides the ENTIRE citydb base tileset (every building),
+//     for a clean IFC-only view.
 let baseClip = null;
 const hideBaseToggle = document.getElementById('hideBaseToggle');
 
@@ -649,17 +664,17 @@ async function setupBaseClip() {
         // inverse: true → clip INSIDE the footprint (remove the base building
         // that sits under the IFC), leaving the rest of the city intact.
         baseClip = new Cesium.ClippingPolygonCollection({ polygons, inverse: true });
-        baseClip.enabled = false;
+        baseClip.enabled = true;
         baseTileset.clippingPolygons = baseClip;
-        console.log('[clip] base footprint clip ready');
+        console.log('[clip] base footprint clip ready (IFC twin always hidden)');
     } catch (e) {
-        console.warn('[clip] base footprint setup failed — toggle will hide the whole base layer', e);
+        console.warn('[clip] base footprint setup failed — IFC twin may z-fight', e);
     }
 }
 
+// Toggle = hide ALL citydb buildings (not just the twin).
 if (hideBaseToggle) hideBaseToggle.addEventListener('change', () => {
-    if (baseClip) baseClip.enabled = hideBaseToggle.checked;
-    else if (baseTileset) baseTileset.show = !hideBaseToggle.checked;  // fallback
+    if (baseTileset) baseTileset.show = !hideBaseToggle.checked;
 });
 
 // ── Reset everything to the default view ──────────────────────────────
@@ -675,8 +690,7 @@ document.getElementById('resetAll')?.addEventListener('click', () => {
     enableShadows(false);
     const st = document.getElementById('shadowToggle'); if (st) st.checked = false;
 
-    if (baseClip) baseClip.enabled = false;
-    else if (baseTileset) baseTileset.show = true;
+    if (baseTileset) baseTileset.show = true;   // (baseClip stays on — twin always hidden)
     if (hideBaseToggle) hideBaseToggle.checked = false;
 
     clearMeasurements();

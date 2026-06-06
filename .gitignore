@@ -7,8 +7,13 @@ __pycache__/
 .idea/
 *.iml
 
+# Claude Code local (per-machine) settings
+.claude/settings.local.json
+
 # Sensitive Data & Credentials
 .env
+.env.*
+!.env.example
 
 # Large Spatial Data (Keep database local)
 *.zip
@@ -20,6 +25,9 @@ media/img/*
 # QGIS Backup files
 *.qgs~
 *.qgz~
-# Other files to ignore
-stuttgart-backend/node_modules/
-stuttgart-digital-twin/node_modules/
+# Node / Vite (match at any depth — earlier prefixed patterns missed cesium_web/)
+node_modules/
+dist/
+
+# Generated 3D tiles (pg2b3dm output — regenerate on each machine, not committed)
+cesium_web/stuttgart-backend/public/tiles/
