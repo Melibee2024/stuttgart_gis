@@ -30,3 +30,9 @@ node_modules/
 .venv/
 *.pyc
 __pycache__/
+
+# QField sync service runtime data (keep local)
+qfc_sync_data/
+py_updates/qfield_service/qfc_sync_data/
+py_updates/qfield_service/web/
+py_updates/qfield_service/sync_state.json
