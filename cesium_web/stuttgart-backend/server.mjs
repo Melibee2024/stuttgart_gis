@@ -6,7 +6,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.use('/media', express.static('media'));
+app.use('/media', express.static(process.env.PHOTO_WEB_DIR || 'media'));
 
 const pool = new pg.Pool({
     user: process.env.DB_USER,

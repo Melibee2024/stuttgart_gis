@@ -33,7 +33,7 @@ PROJECT_ID = os.environ.get("QFC_PROJECT_ID", "")
 # --------------------------------------------------------------------------- #
 PG_CONN = os.environ.get("PG_CONN", "")
 
-PG_SCHEMA = os.environ.get("PG_SCHEMA", "qfield")
+PG_SCHEMA = os.environ.get("PG_SCHEMA", "qfield_data")
 
 # --------------------------------------------------------------------------- #
 # ogr2ogr location
