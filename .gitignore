@@ -15,8 +15,18 @@ __pycache__/
 *.gpkg
 *.tif
 *.las
+*.geojson
 media/img/*
+IFCGeoreferencing/Misc/bau4.geojson
 
 # QGIS Backup files
 *.qgs~
 *.qgz~
+# Dependencies
+node_modules/
+.env
+
+# Build/IDE files
+.venv/
+*.pyc
+__pycache__/
