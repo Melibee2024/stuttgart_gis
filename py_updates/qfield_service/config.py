@@ -48,7 +48,7 @@ OGR2OGR = os.environ.get(
 # --------------------------------------------------------------------------- #
 LOCAL_DIR = Path(os.environ.get("QFC_LOCAL_DIR", "./qfc_sync_data"))
 
-PHOTO_WEB_DIR = Path(os.environ.get("PHOTO_WEB_DIR", "./web/photos"))
+PHOTO_WEB_DIR = Path(os.environ.get("PHOTO_WEB_DIR", "../../media/qfield_photos"))
 
 # --------------------------------------------------------------------------- #
 # Timing
