@@ -98,3 +98,23 @@ qfc_sync_data/
 py_updates/qfield_service/qfc_sync_data/
 py_updates/qfield_service/web/
 py_updates/qfield_service/sync_state.json
+
+*.mxd~
+*.aux.xml
+
+# =========================
+# Auto-generated / exports
+# =========================
+cesium_web/buildings.geojson.json
+output/
+data/
+exports/
+
+# =========================
+# OS junk
+# =========================
+.DS_Store
+Thumbs.db
+_archiv/
+
+*.ifc
