@@ -17,6 +17,7 @@ __pycache__/
 # =========================
 .env
 *.env
+.env.*
 
 # =========================
 # Python caches / logs
@@ -55,6 +56,8 @@ cesium_web/**/tileset/
 cesium_web/**/build/
 cesium_web/**/dist/
 cesium_web/**/.cache/
+cesium_web/stuttgart-backend/public/tiles/
+media/img/*
 
 # Cesium library (already correct but extended safety)
 cesium_web/Cesium/
@@ -86,6 +89,7 @@ exports/
 # =========================
 .DS_Store
 Thumbs.db
+_archiv
 
 # =========================
 # QField sync service runtime data (keep local)
