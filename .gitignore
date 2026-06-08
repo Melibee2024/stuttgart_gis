@@ -36,3 +36,16 @@ qfc_sync_data/
 py_updates/qfield_service/qfc_sync_data/
 py_updates/qfield_service/web/
 py_updates/qfield_service/sync_state.json
+
+# Claude Code local (per-machine) settings
+.claude/settings.local.json
+
+# Sensitive data variants (keep example template tracked)
+.env.*
+!.env.example
+
+# Node / Vite build output
+dist/
+
+# Generated 3D tiles (pg2b3dm output — regenerate on each machine, not committed)
+cesium_web/stuttgart-backend/public/tiles_citydb/
