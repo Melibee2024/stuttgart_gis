@@ -16,6 +16,7 @@ app.use(cors());
 app.use(express.json());
 app.use('/media', express.static('media'));
 app.use('/tiles', express.static('public/tiles'));
+app.use('/tiles_citydb', express.static('public/tiles_citydb'));
 
 
 // ─── DB CONNECTION ────────────────────────────────────────────────────────────
@@ -71,10 +72,10 @@ app.get('/api/georef', async (_req, res) => {
                 fp.footprint_geojson
             FROM nexus3d.building_georef bg
             LEFT JOIN LATERAL (
-                SELECT MIN(ST_ZMin(geometry)) AS citydb_base_z,
-                       MAX(ST_ZMax(geometry)) AS citydb_roof_z
-                FROM citydb.geometry_data
-                WHERE feature_id = bg.feature_id AND geometry IS NOT NULL
+                SELECT MIN(ST_ZMin(solid_geometry)) AS citydb_base_z,
+                       MAX(ST_ZMax(solid_geometry)) AS citydb_roof_z
+                FROM citydb.surface_geometry
+                WHERE cityobject_id = bg.feature_id AND solid_geometry IS NOT NULL
             ) cb ON true
             -- 2D footprint (WGS84) of the matched citydb building, for clipping
             -- the base tileset where the IFC sits.
@@ -369,7 +370,7 @@ app.get('/api/buildings/:globalid', async (req, res) => {
             LEFT JOIN bg ON TRUE
 
             -- citydb building feature (for last-modified etc.), by feature_id
-            LEFT JOIN citydb.feature feat
+            LEFT JOIN citydb.cityobject feat
                 ON feat.id = bg.feature_id
 
             -- ALKIS usage / year / field condition, by building gmlid (= objectid)
@@ -379,11 +380,11 @@ app.get('/api/buildings/:globalid', async (req, res) => {
             -- citydb property sets for the building, aggregated
             LEFT JOIN LATERAL (
                 SELECT COALESCE(jsonb_agg(jsonb_build_object(
-                    'name', p.name, 'val_string', p.val_string,
-                    'val_int', p.val_int, 'val_double', p.val_double)), '[]'::jsonb)
+                    'name', p.attrname, 'val_string', p.strval,
+                    'val_int', p.intval, 'val_double', p.realval)), '[]'::jsonb)
                     AS pset_properties
-                FROM citydb.property p
-                WHERE p.feature_id = bg.feature_id
+                FROM citydb.cityobject_genericattrib p
+                WHERE p.cityobject_id = bg.feature_id
             ) prop ON TRUE
 
             -- QField field photos for the building, by building gmlid (= objectid)
@@ -394,7 +395,7 @@ app.get('/api/buildings/:globalid', async (req, res) => {
                     'notes', notes, 'captured_at', captured_at::text)), '[]'::jsonb)
                     AS field_photos
                 FROM qfield_data.building_photos
-                WHERE building_gmlid = bg.objectid
+                WHERE alkis_id = bg.objectid
             ) ph ON TRUE
 
             WHERE ifc.global_id = $1;
