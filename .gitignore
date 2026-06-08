@@ -1,37 +1,99 @@
-# Python Virtual Environment (The heavy folder)
+# =========================
+# Python Virtual Environment
+# =========================
 .venv/
 __pycache__/
 *.py[cod]
 
-# PyCharm Settings (Individual laptop configs)
+# =========================
+# IDE / Editor files
+# =========================
 .idea/
 *.iml
+.vscode/
 
-# Sensitive Data & Credentials
+# =========================
+# Environment / Secrets
+# =========================
 .env
+*.env
+.env.*
 
-# Large Spatial Data (Keep database local)
+# =========================
+# Python caches / logs
+# =========================
+*.log
+*.sqlite3
+
+# =========================
+# GIS RAW DATA (IMPORTANT - prevents your issue)
+# =========================
+*.gml
 *.zip
 *.gpkg
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
 *.tif
+*.tiff
 *.las
-*.geojson
-media/img/*
-IFCGeoreferencing/Misc/bau4.geojson
+*.laz
 
-# QGIS Backup files
+# =========================
+# Cesium / 3D Tiles / Digital Twin outputs
+# =========================
+*.pnts
+*.b3dm
+*.i3dm
+*.cmpt
+*.terrain
+*.ktx2
+
+cesium_web/stuttgart-digital-twin/public/tileset/
+cesium_web/**/tileset/
+cesium_web/**/build/
+cesium_web/**/dist/
+cesium_web/**/.cache/
+cesium_web/stuttgart-backend/public/tiles/
+media/img/*
+
+# Cesium library (already correct but extended safety)
+cesium_web/Cesium/
+
+# =========================
+# Node dependencies
+# =========================
+node_modules/
+cesium_web/**/node_modules/
+
+# =========================
+# QGIS / GIS project temp files
+# =========================
 *.qgs~
 *.qgz~
-# Dependencies
-node_modules/
-.env
+*.mxd~
+*.aux.xml
 
-# Build/IDE files
-.venv/
-*.pyc
-__pycache__/
+# =========================
+# Auto-generated / exports
+# =========================
+cesium_web/buildings.geojson.json
+output/
+data/
+exports/
 
+# =========================
+# OS junk
+# =========================
+.DS_Store
+Thumbs.db
+_archiv
+
+# =========================
 # QField sync service runtime data (keep local)
+# =========================
 qfc_sync_data/
 py_updates/qfield_service/qfc_sync_data/
 py_updates/qfield_service/web/
@@ -53,3 +115,6 @@ dist/
 
 # Generated 3D tiles (pg2b3dm output — regenerate on each machine, not committed)
 cesium_web/stuttgart-backend/public/tiles_citydb/
+
+# IFC source files (large, not committed)
+*.ifc
