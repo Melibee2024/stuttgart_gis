@@ -6,7 +6,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.use('/media', express.static('media'));
+app.use('/media', express.static(process.env.PHOTO_WEB_DIR || 'media'));
 
 const pool = new pg.Pool({
     user: process.env.DB_USER,
@@ -34,10 +34,10 @@ app.get('/api/buildings/:identifier', async (req, res) => {
             p.notes AS photo_notes
         FROM citydb.building b
         INNER JOIN citydb.external_reference er ON b.id = er.cityobject_id
-        LEFT JOIN stuttgart_2D.ax_gebaeude a ON er.name = a.gml_id
-        LEFT JOIN stuttgart_2D.ax_gebaeudefunktion f 
+        LEFT JOIN stuttgart_processed.ax_gebaeude_clean a ON er.name = a.gml_id
+        LEFT JOIN stuttgart_processed.ax_gebaeudefunktion_clean f
             ON split_part(b.function, '_', 2) = f.wert::text
-        LEFT JOIN qfield_data.building_photos p ON er.name = p.building_gmlid
+        LEFT JOIN qfield_data.building_photos p ON er.name = p.alkis_id
         WHERE 
             -- Strips 'building_' prefix if present (e.g. 'building_9' becomes '9') to match numeric citydb id
             b.id::text = regexp_replace($1, '^building_', '') 
