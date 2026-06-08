@@ -111,4 +111,6 @@ exports/
 # =========================
 .DS_Store
 Thumbs.db
-_archiv
+_archiv/
+
+*.ifc
