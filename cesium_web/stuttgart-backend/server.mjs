@@ -16,6 +16,7 @@ app.use(cors());
 app.use(express.json());
 app.use('/media', express.static('media'));
 app.use('/tiles', express.static('public/tiles'));
+app.use('/tiles_citydb', express.static('public/tiles_citydb'));   // full-city LoD2 base
 
 
 // ─── DB CONNECTION ────────────────────────────────────────────────────────────
@@ -71,10 +72,10 @@ app.get('/api/georef', async (_req, res) => {
                 fp.footprint_geojson
             FROM nexus3d.building_georef bg
             LEFT JOIN LATERAL (
-                SELECT MIN(ST_ZMin(geometry)) AS citydb_base_z,
-                       MAX(ST_ZMax(geometry)) AS citydb_roof_z
-                FROM citydb.geometry_data
-                WHERE feature_id = bg.feature_id AND geometry IS NOT NULL
+                SELECT MIN(ST_ZMin(sg.solid_geometry)) AS citydb_base_z,
+                       MAX(ST_ZMax(sg.solid_geometry)) AS citydb_roof_z
+                FROM citydb.surface_geometry sg
+                WHERE sg.cityobject_id = bg.feature_id AND sg.solid_geometry IS NOT NULL
             ) cb ON true
             -- 2D footprint (WGS84) of the matched citydb building, for clipping
             -- the base tileset where the IFC sits.
@@ -83,10 +84,10 @@ app.get('/api/georef', async (_req, res) => {
                          ST_CollectionExtract(
                              ST_UnaryUnion(ST_Collect(ST_MakeValid(d.geom))), 3), 4326)
                        ) AS footprint_geojson
-                FROM citydb.geometry_data g2
-                CROSS JOIN LATERAL ST_Dump(ST_Force2D(g2.geometry)) d
-                WHERE g2.feature_id = bg.feature_id
-                  AND ST_GeometryType(g2.geometry) = 'ST_PolyhedralSurface'
+                FROM citydb.surface_geometry sg
+                CROSS JOIN LATERAL ST_Dump(ST_Force2D(sg.solid_geometry)) d
+                WHERE sg.cityobject_id = bg.feature_id
+                  AND sg.solid_geometry IS NOT NULL
             ) fp ON true
             LEFT JOIN LATERAL (
                 SELECT MIN(ST_ZMin(geometry)) AS ifc_z_min,
@@ -188,8 +189,12 @@ app.post('/api/regenerate-tiles', async (_req, res) => {
         `Port=${process.env.DB_PORT     ?? 5432}`,
     ].join(';');
 
+    // Use full path so the Node process finds it regardless of PATH.
+    const pg2b3dmBin = process.env.PG2B3DM_PATH
+        ?? 'C:\\Users\\gisstudio\\.dotnet\\tools\\pg2b3dm.exe';
+
     const cmd = [
-        'pg2b3dm',
+        `"${pg2b3dmBin}"`,
         `--connection "${connStr}"`,
         '-t nexus3d.v_ifc_tiles',
         '-c geom',
@@ -369,7 +374,7 @@ app.get('/api/buildings/:globalid', async (req, res) => {
             LEFT JOIN bg ON TRUE
 
             -- citydb building feature (for last-modified etc.), by feature_id
-            LEFT JOIN citydb.feature feat
+            LEFT JOIN citydb.cityobject feat
                 ON feat.id = bg.feature_id
 
             -- ALKIS usage / year / field condition, by building gmlid (= objectid)
@@ -379,11 +384,11 @@ app.get('/api/buildings/:globalid', async (req, res) => {
             -- citydb property sets for the building, aggregated
             LEFT JOIN LATERAL (
                 SELECT COALESCE(jsonb_agg(jsonb_build_object(
-                    'name', p.name, 'val_string', p.val_string,
-                    'val_int', p.val_int, 'val_double', p.val_double)), '[]'::jsonb)
+                    'name', p.attrname, 'val_string', p.strval,
+                    'val_int', p.intval, 'val_double', p.realval)), '[]'::jsonb)
                     AS pset_properties
-                FROM citydb.property p
-                WHERE p.feature_id = bg.feature_id
+                FROM citydb.cityobject_genericattrib p
+                WHERE p.cityobject_id = bg.feature_id
             ) prop ON TRUE
 
             -- QField field photos for the building, by building gmlid (= objectid)
@@ -394,7 +399,7 @@ app.get('/api/buildings/:globalid', async (req, res) => {
                     'notes', notes, 'captured_at', captured_at::text)), '[]'::jsonb)
                     AS field_photos
                 FROM qfield_data.building_photos
-                WHERE building_gmlid = bg.objectid
+                WHERE alkis_id = bg.objectid
             ) ph ON TRUE
 
             WHERE ifc.global_id = $1;
@@ -431,6 +436,59 @@ app.get('/api/buildings/:globalid', async (req, res) => {
 
     } catch (err) {
         console.error('[DB ERROR] /api/buildings/:globalid', err.message);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+
+// ─── GET /api/qfield/:gmlid ────────────────────────────────────────────────────
+// QField field-survey data for ANY building (the citydb LoD2 base buildings),
+// looked up by the building's citydb gmlid. Photos live in
+// qfield_data.building_photos, keyed by the ALKIS id (DEBWL…). The citydb gmlid
+// stores that id with an underscore (DEBW_…), so we map DEBW_ → DEBWL. If the
+// id is already an ALKIS id (or a UUID), the regexp is a harmless no-op.
+app.get('/api/qfield/:gmlid', async (req, res) => {
+    const { gmlid } = req.params;
+    try {
+        const { rows } = await pool.query(`
+            WITH ids AS (
+                SELECT $1::text AS gmlid,
+                       regexp_replace($1::text, '^DEBW_', 'DEBWL') AS alkis_id
+            )
+            SELECT
+                ids.gmlid,
+                ids.alkis_id,
+                dfv.alkis_usage,
+                dfv.alkis_year_built,
+                -- Derive condition from the ACTUAL photo count (data_fusion_view
+                -- over-counts via its joins).
+                CASE WHEN COALESCE(ph.photo_count, 0) > 0
+                     THEN 'Surveyed (' || ph.photo_count || ' photos)'
+                     ELSE 'Not yet surveyed' END        AS qfield_condition,
+                COALESCE(ph.photo_count, 0)            AS photo_count,
+                COALESCE(ph.field_photos, '[]'::jsonb) AS field_photos
+            FROM ids
+            LEFT JOIN public.data_fusion_view dfv ON dfv.gmlid = ids.alkis_id
+            LEFT JOIN LATERAL (
+                SELECT
+                    count(*) AS photo_count,
+                    jsonb_agg(jsonb_build_object(
+                        'photo_id',    photo_id,
+                        'file_path',   file_path,
+                        'photo_name',  photo_name,
+                        'direction',   direction,
+                        'notes',       notes,
+                        'captured_at', captured_at::text)
+                        ORDER BY captured_at) AS field_photos
+                FROM qfield_data.building_photos
+                WHERE alkis_id = ids.alkis_id
+            ) ph ON TRUE;
+        `, [gmlid]);
+
+        console.log(`[qfield] ${gmlid} → photos: ${rows[0]?.photo_count ?? 0}`);
+        return res.json(rows[0]);
+    } catch (err) {
+        console.error('[DB ERROR] /api/qfield/:gmlid', err.message);
         return res.status(500).json({ error: err.message });
     }
 });
