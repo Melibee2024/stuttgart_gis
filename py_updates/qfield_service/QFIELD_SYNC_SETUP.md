@@ -65,26 +65,51 @@ PACKAGE_TIMEOUT=180
 | `PG_SCHEMA` | `qfield_data` | **Important fix**: the script's default value (`qfield`) does not exist in the database. The correct, existing schema is `qfield_data`. Using the wrong schema would cause the sync to fail or create an unwanted empty `qfield` schema |
 | `OGR2OGR` | `C:\OSGeo4W\bin\ogr2ogr.exe` | The original path (`C:\Program Files\QGIS 3.42.0\bin\ogr2ogr.exe`) was specific to the other machine and doesn't exist here. Two local options were found (OSGeo4W and the one bundled with PostgreSQL 17); **OSGeo4W was chosen** because it's a full GDAL/OGR install with complete driver support (GeoPackage, etc.), more comparable to a QGIS-bundled GDAL than the minimal PostgreSQL-bundled build |
 
-## 4. Photo storage location
+## 4. Photo storage location (CRITICAL)
 
-A new folder was created for synced photos:
+Synced photos must land in the exact folder the Cesium backend serves `/media`
+from, otherwise they will never appear in the viewer:
+
 ```
-stuttgart_gis/media/qfield_photos/
+stuttgart_gis/cesium_web/stuttgart-backend/media/
 ```
 
-`config.py` was updated so this is the **default** location (no longer
-something that must be overridden via environment variable):
+This is enforced by `PHOTO_WEB_DIR` in the `.env`:
+
+```
+PHOTO_WEB_DIR=../../cesium_web/stuttgart-backend/media
+```
+
+### Why this matters — the full chain
+
+1. The DB stores `file_path` like `DCIM/building-photos_<ts>.jpg`.
+2. The frontend (`stuttgart-digital-twin/src/main.js`) builds the image URL
+   from just the **basename**:
+   `http://localhost:5000/media/building-photos_<ts>.jpg`.
+3. The backend (`stuttgart-backend/server.mjs`) serves `/media` statically from
+   its own `media/` folder: `express.static('media')`.
+4. The sync service (`main.py` → `sync_photos`) copies each referenced photo,
+   by **basename**, into `PHOTO_WEB_DIR`.
+
+The filenames always match (both sides use the basename), so the ONLY thing
+that has to be correct is that **`PHOTO_WEB_DIR` == the backend's `media/`
+folder**. An earlier setup pointed `PHOTO_WEB_DIR` at a separate
+`media/qfield_photos/` folder, which the backend never reads — that made newly
+synced photos silently fail to show in Cesium. That folder has been removed.
+
+### Launch-location robustness
+
+`config.py` now resolves all relative paths against the location of
+`config.py` itself (the `qfield_service/` folder), **not** the current working
+directory:
 
 ```python
-PHOTO_WEB_DIR = Path(os.environ.get("PHOTO_WEB_DIR", "../../media/qfield_photos"))
+BASE_DIR = Path(__file__).resolve().parent
+# relative PHOTO_WEB_DIR / QFC_LOCAL_DIR are resolved against BASE_DIR
 ```
 
-(Path is relative to `py_updates/qfield_service/`, resolving to
-`stuttgart_gis/media/qfield_photos/`.)
-
-This keeps the `.env` file minimal — it now only contains values that truly
-need to be personalized (credentials, DB connection, tool paths), not paths
-that already match the project's sensible defaults.
+This means the service behaves identically whether launched from PyCharm, a
+terminal in another folder, or a scheduled task.
 
 ## 5. Python environment & dependencies
 

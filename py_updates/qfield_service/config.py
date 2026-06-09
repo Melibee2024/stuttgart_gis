@@ -46,9 +46,26 @@ OGR2OGR = os.environ.get(
 # --------------------------------------------------------------------------- #
 # Local folders
 # --------------------------------------------------------------------------- #
-LOCAL_DIR = Path(os.environ.get("QFC_LOCAL_DIR", "./qfc_sync_data"))
+# Anchor all relative paths to THIS file's location, not the current working
+# directory. This makes the service behave identically no matter where you
+# launch it from (PyCharm, a terminal in another folder, a scheduled task...).
+BASE_DIR = Path(__file__).resolve().parent
 
-PHOTO_WEB_DIR = Path(os.environ.get("PHOTO_WEB_DIR", "../../media/qfield_photos"))
+
+def _resolve(env_var: str, default: str) -> Path:
+    """Resolve a configured path: absolute paths are used as-is; relative paths
+    are resolved against BASE_DIR (the qfield_service folder)."""
+    raw = Path(os.environ.get(env_var, default))
+    return raw if raw.is_absolute() else (BASE_DIR / raw).resolve()
+
+
+# Where downloaded GeoPackages + raw photos are cached.
+LOCAL_DIR = _resolve("QFC_LOCAL_DIR", "./qfc_sync_data")
+
+# Where referenced photos are mirrored. This MUST match the folder the Cesium
+# backend serves '/media' from (server.mjs: express.static('media')), otherwise
+# the synced photos won't appear in the Cesium viewer.
+PHOTO_WEB_DIR = _resolve("PHOTO_WEB_DIR", "../../cesium_web/stuttgart-backend/media")
 
 # --------------------------------------------------------------------------- #
 # Timing
