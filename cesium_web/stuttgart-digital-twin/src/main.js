@@ -97,7 +97,6 @@ async function loadIfcTileset(ifcClass = null, storey = null) {
         ifcState.storey   = storey;
         applyIfcStyle();
         viewer.scene.primitives.add(ifcTileset);
-        await viewer.zoomTo(ifcTileset);
 
         console.log('✅ IFC 3D Tileset loaded');
     } catch (e) {
@@ -122,63 +121,11 @@ async function loadIfcTileset(ifcClass = null, storey = null) {
 //    off, and works regardless of the ion tileset's vertical datum.
 // =====================================================================
 
-async function alignIFCToCityDBBase(ifcTileset) {
-    const MAX_ATTEMPTS = 12;
-    const RETRY_MS     = 600;
-
-    try {
-        const res = await fetch(`${API}/api/georef`);
-        if (!res.ok) throw new Error(`/api/georef HTTP ${res.status}`);
-        const g = await res.json();
-
-        if (g.citydb_base_z == null || g.citydb_roof_z == null || g.ifc_z_min == null) {
-            console.warn('⚠ [align] missing heights from /api/georef — skipping', g);
-            return;
-        }
-        const citydbHeight = g.citydb_roof_z - g.citydb_base_z;
-
-        // Ray origin: straight above the IFC building centre (its footprint
-        // overlaps the citydb twin, so the ray hits that building's roof).
-        const carto = Cesium.Cartographic.fromCartesian(ifcTileset.boundingSphere.center);
-        const rayOrigin = Cesium.Cartesian3.fromRadians(
-            carto.longitude, carto.latitude, carto.height + 2000
-        );
-
-        let roofHit = null;
-        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            const hit = await viewer.scene.clampToHeightMostDetailed(
-                [rayOrigin], [ifcTileset]   // exclude IFC → sample the citydb building
-            );
-            if (hit?.[0]) { roofHit = hit[0]; break; }
-            console.log(`[align] attempt ${attempt}/${MAX_ATTEMPTS} — citydb tiles not ready, retrying…`);
-            await new Promise(r => setTimeout(r, RETRY_MS));
-        }
-        if (!roofHit) {
-            console.warn('⚠ [align] could not sample citydb roof — alignment skipped');
-            return;
-        }
-
-        const roofRendered = Cesium.Cartographic.fromCartesian(roofHit).height;
-        const baseRendered = roofRendered - citydbHeight;   // citydb building base
-        const delta        = baseRendered - g.ifc_z_min;    // IFC bottom → that base
-
-        console.log(`[align] citydb roof(rendered)=${roofRendered.toFixed(2)}  ` +
-                    `height=${citydbHeight.toFixed(2)}  base=${baseRendered.toFixed(2)}  ` +
-                    `ifc_z_min=${g.ifc_z_min.toFixed(2)}  → Δ=${delta.toFixed(2)} m`);
-
-        // ENU "up" translation (avoids ECEF tilt at this latitude).
-        const surface = Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, 0);
-        const enu     = Cesium.Transforms.eastNorthUpToFixedFrame(surface);
-        const shift   = Cesium.Matrix4.multiplyByPointAsVector(
-            enu, new Cesium.Cartesian3(0, 0, delta), new Cesium.Cartesian3()
-        );
-        ifcTileset.modelMatrix = Cesium.Matrix4.fromTranslation(shift);
-        console.log(`✅ [align] IFC bottom snapped to citydb base (Δ ${delta.toFixed(2)} m)`);
-
-    } catch (e) {
-        console.warn('⚠ [align] height alignment error:', e);
-    }
-}
+// Vertical placement is now baked into the tiles: both the IFC view
+// (nexus3d.v_ifc_tiles) and the citydb base (nexus3d.citydb_base_tiles) add the
+// Stuttgart geoid undulation (+47.2 m) to convert DHHN2016 orthometric heights
+// to WGS84 ellipsoidal, so the tiles sit directly on Cesium World Terrain — no
+// runtime modelMatrix shift needed.
 
 // =====================================================================
 // 5. TILE REGENERATION
@@ -210,11 +157,10 @@ async function regenerateTiles() {
                 regenStatus.style.color = '#4ade80';
             }
             console.log('[tiles] Regenerated. Reloading tileset…');
-            // Reload the tileset, then re-snap it onto the citydb base.
+            // Tiles carry their own (geoid-shifted) height — just reload.
             const cls    = filterClass?.value  || null;
             const storey = filterStorey?.value || null;
             await loadIfcTileset(cls, storey);
-            if (ifcTileset) await alignIFCToCityDBBase(ifcTileset);
         } else {
             throw new Error(data.error ?? 'Unknown error');
         }
@@ -236,21 +182,56 @@ if (regenBtn) regenBtn.addEventListener('click', regenerateTiles);
 // 6. BASE TILESET + STARTUP
 // =====================================================================
 
-(async () => {
-    try {
-        baseTileset = await Cesium.Cesium3DTileset.fromIonAssetId(96188);
-        viewer.scene.primitives.add(baseTileset);
+// HFT Bau4 building centre (EPSG:4326). Tiles sit at true ellipsoidal height
+// (~287–311 m) on Cesium World Terrain, so the camera target is at that altitude.
+const IFC_CENTER_LON = 9.171643;
+const IFC_CENTER_LAT = 48.780050;
 
+function flyToIfc(duration = 1.5) {
+    return viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(
+            IFC_CENTER_LON - 0.0008, IFC_CENTER_LAT - 0.0007, 440
+        ),
+        orientation: {
+            heading: Cesium.Math.toRadians(30),
+            pitch:   Cesium.Math.toRadians(-42),
+            roll:    0.0,
+        },
+        duration,
+    });
+}
+
+(async () => {
+    // Cesium World Terrain (ion). With a token in VITE_ION_TOKEN it loads
+    // un-throttled; otherwise the shared default token is used (rate-limited).
+    try {
+        viewer.scene.setTerrain(Cesium.Terrain.fromWorldTerrain());
+    } catch (e) {
+        console.warn('⚠ World Terrain unavailable — staying on the ellipsoid:', e.message ?? e);
+    }
+
+    // Local full-city LoD2 base, tiled from citydb in hft_db (40k buildings).
+    // Replaces the partial ion asset so every building shows. Geoid-shifted in
+    // the DB view, so it rests on the terrain.
+    try {
+        baseTileset = await Cesium.Cesium3DTileset.fromUrl(
+            `${API}/tiles_citydb/tileset.json`, { maximumScreenSpaceError: 16 }
+        );
+        viewer.scene.primitives.add(baseTileset);
+        console.log('✅ citydb base tileset loaded');
+    } catch (e) {
+        console.warn('⚠ citydb base tileset not available:', e.message ?? e);
+    }
+
+    try {
         await loadFilters();
         populateLegend();
         await loadIfcTileset();
 
-        // Snap the IFC bottom onto its matching citydb building base (live,
-        // no hardcoded geoid — see section 4).
-        if (ifcTileset) await alignIFCToCityDBBase(ifcTileset);
+        await flyToIfc();
 
         await initModeTools();   // slicer range + shadow defaults
-        await setupBaseClip();   // prepare the "hide citydb under IFC" clip
+        await setupBaseClip();   // clip the citydb twin sitting under the IFC
         setMode('ifc');          // start in IFC mode
 
         console.log('✅ Nexus3D ready.');
@@ -368,18 +349,22 @@ viewer.screenSpaceEventHandler.setInputAction(async function (movement) {
 
     rightSidebar.classList.add('active');
 
-    // Only the IFC tileset carries our metadata. The Stuttgart base buildings
-    // (ion asset 96188) are also Cesium3DTileFeatures but have no global_id —
-    // clicking one previously produced the scary "No global_id" error.
+    // The detailed IFC tileset carries per-element metadata (global_id). The
+    // citydb LoD2 base buildings instead carry a `gmlid` — clicking one shows
+    // its QField field-survey data (photos keyed by the building's ALKIS id).
     const isIfc = picked.primitive === ifcTileset;
 
     if (!isIfc) {
-        alkisTableBody.innerHTML =
-            '<tr><td colspan="2" style="color:#94a3b8;">Stuttgart base building ' +
-            '(citydb LoD2) — not an imported IFC asset.</td></tr>';
-        qfieldDataContainer.innerHTML =
-            '<p style="color:#94a3b8;">Click the detailed IFC model to see its ' +
-            'attributes, property sets, and QField photos.</p>';
+        // Base tiles carry the building's ALKIS id (resolved to the root building,
+        // so any BuildingPart maps to the right record). Fall back to gmlid.
+        const id = picked.getProperty('alkis_id') || picked.getProperty('gmlid');
+        if (!id) {
+            alkisTableBody.innerHTML =
+                '<tr><td colspan="2" style="color:#94a3b8;">Base building — no identifier.</td></tr>';
+            qfieldDataContainer.innerHTML = '';
+            return;
+        }
+        await fetchQfieldRecord(id);   // citydb base building → QField photos
         return;
     }
 
@@ -445,6 +430,48 @@ async function fetchDatabaseRecord(globalId) {
                 </p>
             </div>`;
     }
+}
+
+// Citydb LoD2 base building → fetch + show its QField field-survey record
+// (photos keyed by the building's ALKIS id). Reuses renderProfile's QField
+// sections; the __base flag makes them show regardless of the active mode.
+async function fetchQfieldRecord(gmlid) {
+    alkisTableBody.innerHTML =
+        '<tr><td colspan="2" style="color:#fbbf24;">⏳ Loading building…</td></tr>';
+    qfieldDataContainer.innerHTML =
+        '<p style="color:#fbbf24;text-align:center;">⏳ Querying QField data…</p>';
+    try {
+        const res = await fetch(`${API}/api/qfield/${encodeURIComponent(gmlid)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        lastRecord = await res.json();
+        lastRecord.__base = true;
+        populateBaseSummary(lastRecord);
+        renderProfile(lastRecord);
+    } catch (err) {
+        console.error('QField fetch error:', err);
+        lastRecord = null;
+        alkisTableBody.innerHTML =
+            '<tr><td colspan="2" style="color:#ef4444;">Failed to load building data.</td></tr>';
+        qfieldDataContainer.innerHTML = `
+            <div style="background:rgba(239,68,68,.1);border:1px solid #ef4444;
+                        padding:10px;border-radius:4px;">
+                <p style="color:#ef4444;margin:0;"><strong>Could not reach the backend (${API}).</strong></p>
+            </div>`;
+    }
+}
+
+// Top summary table for a clicked base building.
+function populateBaseSummary(d) {
+    const fields = {
+        'ALKIS ID':   d.alkis_id        ?? '—',
+        'citydb GML': d.gmlid           ?? '—',
+        'Usage':      d.alkis_usage     ?? '—',
+        'Year Built': d.alkis_year_built ?? '—',
+        'Condition':  d.qfield_condition ?? '—',
+        'Photos':     d.photo_count     ?? 0,
+    };
+    alkisTableBody.innerHTML = Object.entries(fields)
+        .map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('');
 }
 
 // Render the right-panel sections relevant to the current mode, so the
@@ -514,7 +541,8 @@ function renderProfile(d) {
         kvRow('Last modified', d.last_modified)));
 
     let sections;
-    if (currentMode === 'qfield')      sections = [conditionHtml(), photosHtml()];
+    if (d.__base)                      sections = [conditionHtml(), photosHtml()];
+    else if (currentMode === 'qfield') sections = [conditionHtml(), photosHtml()];
     else if (currentMode === '3dcity') sections = [summaryHtml()];
     else /* ifc */                     sections = [ifcAttrsHtml(), psetsHtml()];
 
@@ -661,9 +689,11 @@ async function setupBaseClip() {
         const polygons = rings.map(poly => new Cesium.ClippingPolygon({
             positions: Cesium.Cartesian3.fromDegreesArray(poly[0].flat()),
         }));
-        // inverse: true → clip INSIDE the footprint (remove the base building
-        // that sits under the IFC), leaving the rest of the city intact.
-        baseClip = new Cesium.ClippingPolygonCollection({ polygons, inverse: true });
+        // inverse:false (default) → clip regions INSIDE any polygon, i.e. remove
+        // only the citydb twin under the IFC, leaving the rest of the city.
+        // (inverse:true would clip everything OUTSIDE the footprint — the whole
+        // city — which is the opposite of what we want.)
+        baseClip = new Cesium.ClippingPolygonCollection({ polygons, inverse: false });
         baseClip.enabled = true;
         baseTileset.clippingPolygons = baseClip;
         console.log('[clip] base footprint clip ready (IFC twin always hidden)');
@@ -698,7 +728,7 @@ document.getElementById('resetAll')?.addEventListener('click', () => {
     rightSidebar.classList.remove('active');
 
     setMode('ifc');
-    if (ifcTileset) viewer.zoomTo(ifcTileset);
+    if (ifcTileset) flyToIfc();
 });
 
 // =====================================================================
