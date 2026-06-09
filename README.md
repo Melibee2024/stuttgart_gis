@@ -1,41 +1,148 @@
-# HFT Stuttgart 3D and 2D Data Integration
-This repository contains the database configurations, SQL logic, and synchronization workflows for the HFT Stuttgart Digital Twin project. It facilitates the integration of authoritative 2D ALKIS cadastral data, 3D CityGML models, and dynamic field observations into a unified PostgreSQL/PostGIS environment.
+# HFT Stuttgart Digital Twin
+
+A proof-of-concept urban Digital Twin linking 3D CityGML building geometry, 2D ALKIS cadastral data, and live QField field observations, visualized in a browser-based CesiumJS viewer.
+
+---
+
+## How It Generally Works
+
+Field data is collected in QField on mobile, synced via QFieldCloud, and written into PostGIS by a Python polling service (`qfield_service`). The Node.js backend queries the database and serves 3D tiles and building attributes to the CesiumJS frontend. Clicking a building in the viewer displays cadastral (ALKIS) and field survey data, including field photos, in a side panel.
+
+---
 
 ## Project Structure
-* sql_scripts/: PostgreSQL/PostGIS schemas, views, and relational logic.
 
-  * `schemas/`: Definitions for `stuttgart_2d`, `citydb`, and `qfield_data`.
+```
+stuttgart_gis/
+├── sql_scripts/
+│   ├── schemas/               # Schema and table setup scripts
+│   └── views_and_triggers/    # SQL views and triggers for data linking and QA
+│
+├── py_updates/
+│   ├── database_configs/      # DB connection parameters
+│   └── qfield_service/        # QFieldCloud sync service
+│
+├── qgis_templates/            # QGIS project files for desktop analysis and QField packaging
+│
+├── cesium_web/
+│   ├── stuttgart-backend/     # Node.js Express API and static tile server
+│   └── stuttgart-digital-twin/ # Vite/CesiumJS frontend
+│
+└── media/
+    └── qfield_photos/         # Local photo mirror (gitignored — populated by qfield_service)
+```
 
-  * `views/`: Triple-schema joins linking 3D, 2D, and field data.
-
-* py_updates/: Python-based automation for data processing and database maintenance.
-  
-  * `database_configs/`: Connection parameters and metadata for secure database access.
-
-* qgis_templates/: Pre-configured QGIS project files (.qgs) optimized for desktop analysis and mobile packaging.
-
-* cesium_web/: CesiumJS integration files, including HTML/JavaScript for the web-based 3D visualization.
-
-* media/: Storage for field-captured photographic evidence and external URLs for the web viewer.
-
-## General Logic & Workflow
-1. Environment Setup: Implementation of a PostGIS-enabled database with dedicated schemas for 2D, 3D, and field data. The 2D schema is initialized via norGIS ALKIS import (gid7) and the 3D schema via 3DCityDB.
-
-2. ETL & Preprocessing: Extraction and loading of six LGL-BW CityGML tiles and ALKIS datasets. SQL functions (e.g., ST_IsValid) are utilized to ensure geometric integrity before attribute pruning and optimization.
-
-3. Mobile GIS & Field Survey: Configuration of QGIS projects for QField, including the creation of the fk_gmlid relational field and custom attribute collection forms. Field data (usage, condition, photos) is captured within a 1 km buffer of the HFT campus.
-
-4. Data Fusion: Establishing a relational link across the three schemas via SQL views. This synchronizes citydb.building geometries with stuttgart_2d.ax_gebaeude records and QField survey results using the GMLID as a primary key.
-
-5. Visualization: Transition to a browser-based Digital Twin using CesiumJS. SQL views are served to the web environment, allowing users to query 3D buildings and dynamically retrieve synchronized 2D history and field photos.
 ---
-## Configuration & Setup
-Database: PostgreSQL/PostGIS. Connection parameters should be configured within the PyCharm Database tool window or a local .env file.
 
-External Tools:
+## Database
 
-* 3DCityDB Importer/Exporter: For CityGML tile management.
+Three schemas in `hft_db` (PostgreSQL/PostGIS):
 
-* norGIS ALKIS-Import (gid7): For GeoInfoDok 7 cadastral data processing.
+| Schema | Source | Purpose |
+|--------|--------|---------|
+| `citydb` | 3DCityDB v4 + LGL-BW CityGML tiles | 3D building geometry |
+| `stuttgart_2d` | norGIS ALKIS-Import (gid7) | 2D cadastral footprints |
+| `qfield_data` | QField surveys via qfield_service | Field observations and photos |
 
-* Environment: Requires Python 3.x and a local web server for hosting the CesiumJS frontend.
+### SQL Scripts (`sql_scripts/`)
+
+These scripts were run to set up the database structure and verify data integrity:
+
+**Schemas:**
+- `qfield_building_data.sql` — creates the `qfield_data.building_photos` table and the UUID trigger (`t_qfield_generate_photo_uuid`). This table is queried live by the Cesium backend.
+- `stuttgart_processed_schema.sql` — sets up the `stuttgart_processed` schema used as the base for the views below.
+
+**Views (data linking and QA):**
+- `v_building_digital_twin.sql` — main triple-schema join across ALKIS, citydb, and QField photos, used to verify the data links are correct.
+- `v_cesium_payload.sql` — spatial subset of the above for the HFT campus area, designed as a prototype Cesium data source. The live backend uses `public.data_fusion_view` (a partner-created view) instead, but the logic is equivalent.
+- `v_integrity_check.sql` — validates 2D/3D match status (Perfect Match / Orphan 2D / Orphan 3D). Used during setup to confirm all buildings linked correctly.
+- `v_field_progress_monitor.sql` — tracks survey completion per building. Used to monitor field data collection progress.
+- `v_building_field_survey.sql` — field survey data joined to buildings.
+- `v_parcel_building_context.sql` — ALKIS parcel context per building.
+
+---
+
+## Setup (New Machine)
+
+### Prerequisites
+- PostgreSQL 14+ with PostGIS and `hft_db` database restored
+- Node.js 18+
+- Python 3.10+
+- QGIS (for `ogr2ogr`)
+- pg2b3dm (for regenerating LoD2 3D tiles if needed)
+
+### 1. Environment files
+Copy the example files and fill in real credentials:
+```
+copy .env.example .env
+copy cesium_web\stuttgart-backend\.env.example cesium_web\stuttgart-backend\.env
+```
+Make sure `PHOTO_WEB_DIR` in `py_updates/qfield_service/.env` points to the backend media folder:
+```
+PHOTO_WEB_DIR=../../cesium_web/stuttgart-backend/media
+```
+
+### 2. Install dependencies
+```powershell
+cd cesium_web\stuttgart-backend && npm install
+cd cesium_web\stuttgart-digital-twin && npm install
+cd py_updates\qfield_service && pip install python-dotenv qfieldcloud-sdk
+```
+
+### 3. Regenerate LoD2 3D Tiles (if `tiles_citydb/` is missing)
+The tile folder is gitignored — regenerate it from the database:
+```powershell
+pg2b3dm -h localhost -p 5432 -d hft_db -U postgres `
+  --schemaname nexus3d --tablename citydb_base_tiles `
+  --geometrycolumn wkb_geometry --output cesium_web\stuttgart-backend\public\tiles_citydb
+```
+
+---
+
+## Running the System
+
+Open three terminals:
+
+**Terminal 1 — Backend**
+```powershell
+cd cesium_web\stuttgart-backend
+npm start
+```
+
+**Terminal 2 — Frontend**
+```powershell
+cd cesium_web\stuttgart-digital-twin
+npm run dev
+```
+
+**Terminal 3 — QField sync service**
+```powershell
+cd py_updates\qfield_service
+python sync_service.py
+```
+
+Open `http://localhost:5173` in the browser.
+
+---
+
+## Stopping the Servers
+
+```powershell
+# Backend (port 5000)
+Get-NetTCPConnection -LocalPort 5000 | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }
+
+# Frontend (port 5173)
+Get-NetTCPConnection -LocalPort 5173 | Select-Object -ExpandProperty OwningProcess | ForEach-Object { Stop-Process -Id $_ -Force }
+
+# QField sync service: Ctrl+C in its terminal
+```
+
+---
+
+## External Tools Used
+
+- **3DCityDB Importer/Exporter** — CityGML tile import into the `citydb` schema
+- **norGIS ALKIS-Import (gid7)** — cadastral data import into `stuttgart_2d`
+- **pg2b3dm** — generates LoD2 3D Tiles from PostGIS for Cesium
+- **QFieldCloud SDK** — used by `qfield_service` to poll and download field packages
+- **ogr2ogr** — used by `qfield_service` to write QField data into PostGIS
