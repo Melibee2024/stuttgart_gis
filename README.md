@@ -28,8 +28,9 @@ stuttgart_gis/
 │   ├── stuttgart-backend/     # Node.js Express API and static tile server
 │   └── stuttgart-digital-twin/ # Vite/CesiumJS frontend
 │
-└── media/
-    └── qfield_photos/         # Local photo mirror (gitignored — populated by qfield_service)
+└── media/                     # Project media. NOTE: QField photos are mirrored into
+                               # cesium_web/stuttgart-backend/media/ (served at /media),
+                               # NOT here — see PHOTO_WEB_DIR in qfield_service/.env
 ```
 
 ---
@@ -57,7 +58,10 @@ These scripts were run to set up the database structure and verify data integrit
 - `v_cesium_payload.sql` — spatial subset of the above for the HFT campus area, designed as a prototype Cesium data source. The live backend uses `public.data_fusion_view` (a partner-created view) instead, but the logic is equivalent.
 - `v_integrity_check.sql` — validates 2D/3D match status (Perfect Match / Orphan 2D / Orphan 3D). Used during setup to confirm all buildings linked correctly.
 - `v_field_progress_monitor.sql` — tracks survey completion per building. Used to monitor field data collection progress.
-- `v_building_field_survey.sql` — field survey data joined to buildings.
+- `v_building_field_survey.sql` — field survey data joined to buildings. Restricted
+  to buildings that also exist in the citydb 3D model (via `citydb.external_reference`),
+  so the QField survey layer and the Cesium `data_fusion_view` cover the **same**
+  building set — surveyors can't attach photos to a building that isn't viewable in 3D.
 - `v_parcel_building_context.sql` — ALKIS parcel context per building.
 
 ---
@@ -81,6 +85,24 @@ Make sure `PHOTO_WEB_DIR` in `py_updates/qfield_service/.env` points to the back
 ```
 PHOTO_WEB_DIR=../../cesium_web/stuttgart-backend/media
 ```
+
+Database credentials are **not** committed to the repo. The Python scripts and
+Node backend read them from their (git-ignored) `.env` files. The QGIS project
+(`qgis_templates/qfield_survey.qgz`) connects via a PostgreSQL **service**, so
+each machine also needs a service file with an `[hft_db]` entry:
+
+- **Windows:** `%APPDATA%\postgresql\.pg_service.conf`
+- **Linux/macOS:** `~/.pg_service.conf`
+
+```
+[hft_db]
+host=localhost
+port=5432
+dbname=hft_db
+user=postgres
+password=YOUR_LOCAL_PASSWORD
+```
+Verify it works: `psql "service=hft_db" -c "SELECT 1;"`
 
 ### 2. Install dependencies
 ```powershell
@@ -118,7 +140,7 @@ npm run dev
 **Terminal 3 — QField sync service**
 ```powershell
 cd py_updates\qfield_service
-python sync_service.py
+python main.py
 ```
 
 Open `http://localhost:5173` in the browser.
