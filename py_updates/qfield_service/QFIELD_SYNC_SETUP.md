@@ -180,3 +180,46 @@ C:\backups\stuttgart_gis_backup\IFCGeoreferencing\
 All of `genaubranch`'s pending work (modified + untracked files) was also
 committed locally (commit `61d1d9f`) before switching branches, so nothing
 was lost.
+
+## 9. Database credentials — no more hardcoded passwords
+
+The DB password used to be hardcoded in several committed files. It has been
+removed from all of them; credentials are now supplied per-machine and never
+committed:
+
+- **Python scripts** (`georeference_v4_fit.py`, `ifc_to_postgis.py`, the sync
+  service) read DB settings from a local, git-ignored `.env`.
+- **Node backend** (`server.mjs`) reads them from its own git-ignored `.env`.
+- **QGIS project** (`qgis_templates/qfield_survey.qgz`) references a PostgreSQL
+  *service* (`service='hft_db'`) instead of an inline password.
+
+### Each machine needs a PostgreSQL service file
+
+For the QGIS/QField project to connect, every machine that opens it needs an
+`[hft_db]` entry in its PostgreSQL service file:
+
+- **Windows:** `%APPDATA%\postgresql\.pg_service.conf`
+- **Linux/macOS:** `~/.pg_service.conf`
+
+Contents (adjust to your local DB):
+
+```
+[hft_db]
+host=localhost
+port=5432
+dbname=hft_db
+user=postgres
+password=YOUR_LOCAL_PASSWORD
+```
+
+This file lives **outside** the repo, so the password is never committed.
+After creating it, verify with:
+
+```
+psql "service=hft_db" -c "SELECT 1;"
+```
+
+> Note: the repo is private and the password was **not rotated** — this change
+> only stops it from being committed going forward. If the repo ever becomes
+> public, or wider access is granted, rotate the password and update every
+> machine's `.env` and `.pg_service.conf`.
