@@ -20,15 +20,26 @@ import psycopg2
 import ifcopenshell
 import ifcopenshell.geom
 
+# Load DB credentials from a local .env (next to this script) so secrets are
+# never hardcoded/committed. python-dotenv is optional; if absent, real
+# environment variables are used directly.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass
+
 IFC_PATH = r"C:\3dcitydb-4.4.2\stuttgart_gis\IFCGeoreferencing\HFT_Bau4_2025.04.22_georef.ifc"
 
 DB_CONFIG = {
-    "host":     "localhost",
-    "port":     5432,
-    "dbname":   "hft_db",
-    "user":     "postgres",
-    "password": "gis2026",
+    "host":     os.environ.get("DB_HOST", "localhost"),
+    "port":     int(os.environ.get("DB_PORT", "5432")),
+    "dbname":   os.environ.get("DB_NAME", "hft_db"),
+    "user":     os.environ.get("DB_USER", "postgres"),
+    "password": os.environ.get("DB_PASSWORD"),
 }
+if not DB_CONFIG["password"]:
+    sys.exit("DB_PASSWORD is not set. Add it to a .env file in this directory.")
 
 # IFC classes to extract.  IfcStair and IfcRailing omitted (null/hairline geom).
 TARGET_CLASSES = (
