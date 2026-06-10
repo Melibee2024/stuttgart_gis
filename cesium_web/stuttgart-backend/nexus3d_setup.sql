@@ -136,4 +136,11 @@ LEFT JOIN citydb.building cb
     ON cb.id = er.cityobject_id
 LEFT JOIN qfield_data.building_photos p
     ON b.gml_id::text = p.alkis_id
+-- Only buildings that ALSO exist in the citydb 3D model (i.e. are clickable in
+-- Cesium). This keeps this view consistent with qfield_data.v_building_field_survey
+-- so the 2D survey universe and the 3D viewer show the SAME set of buildings.
+WHERE EXISTS (
+    SELECT 1 FROM citydb.external_reference er2
+    WHERE er2.name = b.gml_id::text
+)
 GROUP BY b.gml_id, f.beschreibung, b.gebaeudefunktion, cb.year_of_construction;

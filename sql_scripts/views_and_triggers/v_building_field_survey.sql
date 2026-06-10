@@ -33,6 +33,14 @@ LEFT JOIN stuttgart_processed.ax_gebaeudefunktion_clean f
 LEFT JOIN qfield_data.building_photos p
     ON b.gml_id = p.alkis_id
 
+-- Only offer buildings for survey that ALSO exist in the citydb 3D model, so a
+-- surveyor can never attach photos to a building that isn't viewable in Cesium.
+-- Keeps this layer consistent with public.data_fusion_view (same building set).
+WHERE EXISTS (
+    SELECT 1 FROM citydb.external_reference er
+    WHERE er.name = b.gml_id
+)
+
 GROUP BY
     b.ogc_fid,
     b.gml_id,
