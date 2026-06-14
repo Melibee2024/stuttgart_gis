@@ -21,11 +21,50 @@ const viewer = new Cesium.Viewer("cesiumContainer", {
     baseLayer: new Cesium.ImageryLayer(
         new Cesium.OpenStreetMapImageryProvider({ url: "https://tile.openstreetmap.org/" })
     ),
+    // PERF: render on demand instead of a constant 60fps loop. With a 40k-building
+    // city tileset, redrawing every idle frame is the biggest GPU drain. Cesium
+    // auto-renders on camera move / input / tile load; we explicitly call
+    // viewer.scene.requestRender() (see `render()` below) after programmatic
+    // changes to primitives (style, show, clip, feature colour, sun time).
+    requestRenderMode:      true,
+    maximumRenderTimeChange: Infinity,   // clock is static (no shadow animation)
 });
 
 viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(
     Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK
 );
+
+// Request a single frame after a programmatic scene mutation (no-op cost when
+// requestRenderMode is off, so it's always safe to call).
+const render = () => viewer.scene.requestRender();
+
+// Dev-only handle for debugging in the browser console (stripped from prod builds).
+if (import.meta.env.DEV) window.__viewer = viewer;
+
+// PERF: cheap scene-level wins for a large city scene.
+viewer.scene.globe.showGroundAtmosphere = false;  // subtle, not needed at city scale
+viewer.scene.moon = undefined;                     // never visible at this altitude
+viewer.scene.fog.enabled = true;                   // keep: fog culls distant terrain detail
+
+// Apply load/throughput tuning to a 3D Tileset. `aggressive` is for the big
+// city base (trade a little distant crispness for far fewer tiles on screen);
+// the detailed IFC building stays sharp.
+function tunePerformance(ts, { aggressive = false } = {}) {
+    if (!ts) return;
+    // Distance-based detail falloff — distant city blocks render much coarser.
+    ts.dynamicScreenSpaceError       = true;
+    ts.dynamicScreenSpaceErrorDensity = 0.00278;
+    ts.dynamicScreenSpaceErrorFactor  = aggressive ? 24 : 4;
+    // Skip intermediate LODs → reach target detail in fewer requests.
+    ts.skipLevelOfDetail        = true;
+    ts.baseScreenSpaceError     = 1024;
+    ts.skipScreenSpaceErrorFactor = 16;
+    ts.skipLevels               = 1;
+    ts.preferLeaves             = true;
+    ts.preloadWhenHidden        = false;   // don't fetch tiles for hidden tilesets
+    ts.cullRequestsWhileMoving  = true;
+    if (aggressive) ts.maximumScreenSpaceError = 24;  // coarser city base (was 16)
+}
 
 // Backend base URL. Defaults to localhost for dev; override at build time with
 // VITE_API_BASE in .env (e.g. when the frontend is served from another host).
@@ -36,25 +75,31 @@ const API = import.meta.env.VITE_API_BASE ?? 'http://localhost:5000';
 //    IfcStair removed — excluded from ingestion (null geometry).
 // =====================================================================
 
+// Real-world palette: HFT "Bau 4 / Block 4" is a reclaimed-TIMBER pavilion with
+// a "friendly beige-red" appearance (salvaged wood frame + steel connectors,
+// circular-building project, shell completed 2025-03 — matches the IFC). So the
+// classes are coloured as warm weathered timber / beige-red, not grey.
 const CLASS_COLORS = {
-    IfcWall:   '#94a3b8',
-    IfcSlab:   '#78716c',
-    IfcWindow: '#7dd3fc',
-    IfcDoor:   '#a78bfa',
-    IfcColumn: '#fbbf24',
-    IfcRoof:   '#f87171',
+    IfcWall:   '#c5a276',   // beige-red timber facade (dominant)
+    IfcSlab:   '#a8865c',   // darker structural timber (floors/decks)
+    IfcWindow: '#acc4cf',   // glass
+    IfcDoor:   '#8a5836',   // dark timber
+    IfcColumn: '#b58c5d',   // timber frame posts
+    IfcRoof:   '#b06a4a',   // weathered beige-red roof
     IfcSpace:  '#86efac',
 };
 
+// Solid elements are fully OPAQUE so the building reads as a solid mass (no
+// see-through "hollow shell" look); only glass (IfcWindow) stays translucent.
 const CLASS_STYLE_CONDITIONS = [
-    ["${ifc_class} === 'IfcWall'",   "color('#94a3b8', 0.85)"],
-    ["${ifc_class} === 'IfcSlab'",   "color('#78716c', 0.90)"],
-    ["${ifc_class} === 'IfcWindow'", "color('#7dd3fc', 0.55)"],
-    ["${ifc_class} === 'IfcDoor'",   "color('#a78bfa', 0.85)"],
-    ["${ifc_class} === 'IfcColumn'", "color('#fbbf24', 0.90)"],
-    ["${ifc_class} === 'IfcRoof'",   "color('#f87171', 0.85)"],
+    ["${ifc_class} === 'IfcWall'",   "color('#c5a276')"],
+    ["${ifc_class} === 'IfcSlab'",   "color('#a8865c')"],
+    ["${ifc_class} === 'IfcWindow'", "color('#acc4cf', 0.78)"],
+    ["${ifc_class} === 'IfcDoor'",   "color('#8a5836')"],
+    ["${ifc_class} === 'IfcColumn'", "color('#b58c5d')"],
+    ["${ifc_class} === 'IfcRoof'",   "color('#b06a4a')"],
     ["${ifc_class} === 'IfcSpace'",  "color('#86efac', 0.25)"],
-    ["true",                          "color('#e2e8f0', 0.70)"],
+    ["true",                          "color('#c2a07a')"],
 ];
 
 // Central IFC display state — filters (class/storey) + the storey-slicer cut.
@@ -72,6 +117,7 @@ function applyIfcStyle() {
         color: { conditions: CLASS_STYLE_CONDITIONS },
         ...(showExpr ? { show: showExpr } : {}),
     });
+    render();
 }
 
 // =====================================================================
@@ -92,11 +138,13 @@ async function loadIfcTileset(ifcClass = null, storey = null) {
             `${API}/tiles/tileset.json`,
             { maximumScreenSpaceError: 16 }
         );
+        tunePerformance(ifcTileset);   // detailed building stays sharp (SSE 16)
 
         ifcState.ifcClass = ifcClass;
         ifcState.storey   = storey;
         applyIfcStyle();
         viewer.scene.primitives.add(ifcTileset);
+        render();
 
         console.log('✅ IFC 3D Tileset loaded');
     } catch (e) {
@@ -144,7 +192,7 @@ async function regenerateTiles() {
     regenBtn.textContent = '⏳ Regenerating…';
     if (regenStatus) {
         regenStatus.textContent = 'Running pg2b3dm…';
-        regenStatus.style.color = '#fbbf24';
+        regenStatus.style.color = '#b45309';
     }
 
     try {
@@ -154,7 +202,7 @@ async function regenerateTiles() {
         if (data.success) {
             if (regenStatus) {
                 regenStatus.textContent = '✅ Tiles regenerated';
-                regenStatus.style.color = '#4ade80';
+                regenStatus.style.color = '#15803d';
             }
             console.log('[tiles] Regenerated. Reloading tileset…');
             // Tiles carry their own (geoid-shifted) height — just reload.
@@ -168,7 +216,7 @@ async function regenerateTiles() {
         console.error('[tiles] Regeneration failed:', err);
         if (regenStatus) {
             regenStatus.textContent = `❌ Failed: ${err.message}`;
-            regenStatus.style.color = '#ef4444';
+            regenStatus.style.color = '#dc2626';
         }
     } finally {
         regenBtn.disabled    = false;
@@ -217,7 +265,15 @@ function flyToIfc(duration = 1.5) {
         baseTileset = await Cesium.Cesium3DTileset.fromUrl(
             `${API}/tiles_citydb/tileset.json`, { maximumScreenSpaceError: 16 }
         );
+        tunePerformance(baseTileset, { aggressive: true });  // 40k-building city base
         viewer.scene.primitives.add(baseTileset);
+        // City Time Machine: filter each base tile's features by height as they
+        // stream in / become visible (see section 6d). No-op until activated.
+        baseTileset.tileVisible.addEventListener(tmApplyTile);
+        // Color Buildings By: paint each base tile's features for the active
+        // thematic layer (see section 6e). No-op until a layer is chosen.
+        baseTileset.tileVisible.addEventListener(colorApplyTile);
+        render();
         console.log('✅ citydb base tileset loaded');
     } catch (e) {
         console.warn('⚠ citydb base tileset not available:', e.message ?? e);
@@ -327,6 +383,7 @@ function clearHighlight() {
     if (!selected.feature) return;
     selected.feature.color = Cesium.Color.WHITE;
     selected.feature = null;
+    render();
 }
 
 viewer.screenSpaceEventHandler.setInputAction(async function (movement) {
@@ -345,7 +402,8 @@ viewer.screenSpaceEventHandler.setInputAction(async function (movement) {
 
     clearHighlight();
     selected.feature = picked;
-    picked.color = Cesium.Color.fromCssColorString('#38bdf8').withAlpha(0.9);
+    picked.color = Cesium.Color.fromCssColorString('#0d9488').withAlpha(0.9);
+    render();
 
     rightSidebar.classList.add('active');
 
@@ -360,7 +418,7 @@ viewer.screenSpaceEventHandler.setInputAction(async function (movement) {
         const id = picked.getProperty('alkis_id') || picked.getProperty('gmlid');
         if (!id) {
             alkisTableBody.innerHTML =
-                '<tr><td colspan="2" style="color:#94a3b8;">Base building — no identifier.</td></tr>';
+                '<tr><td colspan="2" style="color:#69788a;">Base building — no identifier.</td></tr>';
             qfieldDataContainer.innerHTML = '';
             return;
         }
@@ -371,7 +429,7 @@ viewer.screenSpaceEventHandler.setInputAction(async function (movement) {
     const globalId = picked.getProperty('global_id');
     if (!globalId) {
         alkisTableBody.innerHTML =
-            '<tr><td colspan="2" style="color:#ef4444;">This IFC element has no global_id.</td></tr>';
+            '<tr><td colspan="2" style="color:#dc2626;">This IFC element has no global_id.</td></tr>';
         qfieldDataContainer.innerHTML = '';
         return;
     }
@@ -412,7 +470,7 @@ let lastRecord = null;   // cache so mode switches can re-render without re-fetc
 
 async function fetchDatabaseRecord(globalId) {
     qfieldDataContainer.innerHTML =
-        '<p style="color:#fbbf24;text-align:center;">⏳ Querying PostGIS…</p>';
+        '<p style="color:#b45309;text-align:center;">⏳ Querying PostGIS…</p>';
     try {
         const res = await fetch(`${API}/api/buildings/${globalId}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -422,10 +480,10 @@ async function fetchDatabaseRecord(globalId) {
         console.error('API Fetch Error:', err);
         lastRecord = null;
         qfieldDataContainer.innerHTML = `
-            <div style="background:rgba(239,68,68,.1);border:1px solid #ef4444;
+            <div style="background:rgba(220,38,38,.06);border:1px solid #dc2626;
                         padding:10px;border-radius:4px;">
-                <p style="color:#ef4444;margin:0 0 5px;"><strong>Database connection failed.</strong></p>
-                <p style="font-size:.8rem;color:#cbd5e1;margin:0;">
+                <p style="color:#dc2626;margin:0 0 5px;"><strong>Database connection failed.</strong></p>
+                <p style="font-size:.8rem;color:#475467;margin:0;">
                     Ensure the Node.js backend (${API}) is running.
                 </p>
             </div>`;
@@ -437,9 +495,9 @@ async function fetchDatabaseRecord(globalId) {
 // sections; the __base flag makes them show regardless of the active mode.
 async function fetchQfieldRecord(gmlid) {
     alkisTableBody.innerHTML =
-        '<tr><td colspan="2" style="color:#fbbf24;">⏳ Loading building…</td></tr>';
+        '<tr><td colspan="2" style="color:#b45309;">⏳ Loading building…</td></tr>';
     qfieldDataContainer.innerHTML =
-        '<p style="color:#fbbf24;text-align:center;">⏳ Querying QField data…</p>';
+        '<p style="color:#b45309;text-align:center;">⏳ Querying QField data…</p>';
     try {
         const res = await fetch(`${API}/api/qfield/${encodeURIComponent(gmlid)}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -451,11 +509,11 @@ async function fetchQfieldRecord(gmlid) {
         console.error('QField fetch error:', err);
         lastRecord = null;
         alkisTableBody.innerHTML =
-            '<tr><td colspan="2" style="color:#ef4444;">Failed to load building data.</td></tr>';
+            '<tr><td colspan="2" style="color:#dc2626;">Failed to load building data.</td></tr>';
         qfieldDataContainer.innerHTML = `
-            <div style="background:rgba(239,68,68,.1);border:1px solid #ef4444;
+            <div style="background:rgba(220,38,38,.06);border:1px solid #dc2626;
                         padding:10px;border-radius:4px;">
-                <p style="color:#ef4444;margin:0;"><strong>Could not reach the backend (${API}).</strong></p>
+                <p style="color:#dc2626;margin:0;"><strong>Could not reach the backend (${API}).</strong></p>
             </div>`;
     }
 }
@@ -480,19 +538,19 @@ function renderProfile(d) {
     if (!d) { qfieldDataContainer.innerHTML = ''; return; }
 
     const box = (title, body) => `
-        <div style="background:rgba(0,0,0,.2);padding:10px;border-radius:6px;margin-bottom:10px;">
+        <div style="background:#f6f8fa;border:1px solid #e4e9ef;padding:11px;border-radius:10px;margin-bottom:10px;">
             <p style="margin:0 0 8px;font-weight:500;">${title}</p>${body}
         </div>`;
 
     const kvTable = rows => `<table style="width:100%;font-size:.82rem;border-collapse:collapse;">${rows}</table>`;
     const kvRow   = (k, v) => `<tr>
-        <th style="text-align:left;padding:2px 8px 2px 0;color:#94a3b8;font-weight:400;white-space:nowrap;">${k}</th>
-        <td style="padding:2px 0;color:#e2e8f0;">${v ?? '—'}</td></tr>`;
+        <th style="text-align:left;padding:2px 8px 2px 0;color:#69788a;font-weight:400;white-space:nowrap;">${k}</th>
+        <td style="padding:2px 0;color:#1b2733;">${v ?? '—'}</td></tr>`;
 
     const conditionHtml = () => `
-        <div style="background:rgba(0,0,0,.3);padding:12px;border-radius:6px;margin-bottom:10px;border-left:3px solid #38bdf8;">
+        <div style="background:rgba(15,118,110,.06);padding:12px;border-radius:6px;margin-bottom:10px;border-left:3px solid #0f766e;">
             <p style="margin:0 0 8px;"><strong>Condition:</strong>
-               <span style="color:#4ade80;">${d.qfield_condition ?? 'N/A'}</span></p>
+               <span style="color:#15803d;">${d.qfield_condition ?? 'N/A'}</span></p>
             <p style="margin:0 0 8px;"><strong>Usage:</strong> ${d.alkis_usage ?? 'N/A'}</p>
             <p style="margin:0;"><strong>Year Built:</strong> ${d.alkis_year_built ?? 'N/A'}</p>
         </div>`;
@@ -501,7 +559,7 @@ function renderProfile(d) {
         if (!(d.field_photos?.length > 0)) return `
             <div class="photo-container" style="text-align:center;padding:20px 0;">
                 <span class="photo-label">Field Photographs</span>
-                <p style="color:#64748b;font-style:italic;font-size:.85rem;margin-top:5px;">
+                <p style="color:#69788a;font-style:italic;font-size:.85rem;margin-top:5px;">
                     No QField photos recorded for this building yet.
                 </p></div>`;
         let h = `<div style="margin-top:4px;"><p style="margin:0 0 8px;font-weight:500;">Field Photographs</p>`;
@@ -514,10 +572,10 @@ function renderProfile(d) {
             h += `
                 <div class="photo-container" style="margin-bottom:12px;">
                     <span class="photo-label">${caption}</span>
-                    ${photo.notes ? `<p style="font-size:.8rem;color:#94a3b8;margin:4px 0;">${photo.notes}</p>` : ''}
+                    ${photo.notes ? `<p style="font-size:.8rem;color:#69788a;margin:4px 0;">${photo.notes}</p>` : ''}
                     <img src="${photoUrl}" alt="${caption}" style="width:100%;border-radius:4px;"
                          onerror="this.style.display='none'">
-                    ${photo.captured_at ? `<p style="font-size:.75rem;color:#64748b;margin:4px 0 0;">${photo.captured_at}</p>` : ''}
+                    ${photo.captured_at ? `<p style="font-size:.75rem;color:#69788a;margin:4px 0 0;">${photo.captured_at}</p>` : ''}
                 </div>`;
         });
         return h + `</div>`;
@@ -540,11 +598,13 @@ function renderProfile(d) {
         kvRow('Z Top',  d.z_max_ellipsoidal != null ? d.z_max_ellipsoidal.toFixed(2) + ' m' : null) +
         kvRow('Last modified', d.last_modified)));
 
+    // QField field photos stay reachable in BOTH surviving modes (the dedicated
+    // QField mode was removed): clicking the detailed IFC building shows its
+    // photos next to the IFC data, and any citydb base building shows them too.
     let sections;
     if (d.__base)                      sections = [conditionHtml(), photosHtml()];
-    else if (currentMode === 'qfield') sections = [conditionHtml(), photosHtml()];
-    else if (currentMode === '3dcity') sections = [summaryHtml()];
-    else /* ifc */                     sections = [ifcAttrsHtml(), psetsHtml()];
+    else if (currentMode === '3dcity') sections = [summaryHtml(), photosHtml()];
+    else /* ifc */                     sections = [ifcAttrsHtml(), psetsHtml(), photosHtml()];
 
     qfieldDataContainer.innerHTML =
         sections.filter(Boolean).join('') ||
@@ -559,8 +619,8 @@ let currentMode = 'ifc';
 
 function setMode(mode) {
     currentMode = mode;
-    const map = { ifc: 'modeIfc', qfield: 'modeQfield', '3dcity': 'mode3dcity' };
-    const panels = { ifc: 'panel-ifc', qfield: 'panel-qfield', '3dcity': 'panel-3dcity' };
+    const map = { ifc: 'modeIfc', '3dcity': 'mode3dcity' };
+    const panels = { ifc: 'panel-ifc', '3dcity': 'panel-3dcity' };
     Object.entries(map).forEach(([m, id]) =>
         document.getElementById(id)?.classList.toggle('active', m === mode));
     Object.entries(panels).forEach(([m, id]) =>
@@ -578,6 +638,11 @@ function setMode(mode) {
     if (mode !== '3dcity') {
         enableShadows(false);
         const t = document.getElementById('shadowToggle'); if (t) t.checked = false;
+        // Restore the full city when leaving 3D-City so other modes never show a
+        // half-revealed skyline.
+        if (tmActive) { if (tmToggle) tmToggle.checked = false; tmSetActive(false); }
+        // Drop thematic colouring so the IFC view shows the plain base buildings.
+        if (colorMode !== 'none') { if (colorBy) colorBy.value = 'none'; setColorMode('none'); }
     }
 
     // Re-render the open asset profile for the new mode.
@@ -585,7 +650,6 @@ function setMode(mode) {
 }
 
 document.getElementById('modeIfc')?.addEventListener('click', () => setMode('ifc'));
-document.getElementById('modeQfield')?.addEventListener('click', () => setMode('qfield'));
 document.getElementById('mode3dcity')?.addEventListener('click', () => setMode('3dcity'));
 
 // ── Storey slicer ────────────────────────────────────────────────────
@@ -628,6 +692,7 @@ function enableShadows(on) {
     if (baseTileset) baseTileset.shadows = mode;
     if (ifcTileset)  ifcTileset.shadows  = mode;
     if (on) updateSunTime();
+    render();
 }
 
 function updateSunTime() {
@@ -642,6 +707,7 @@ function updateSunTime() {
     jd = Cesium.JulianDate.addHours(jd, -2, new Cesium.JulianDate());
     viewer.clock.shouldAnimate = false;
     viewer.clock.currentTime = jd;
+    render();
 }
 
 if (shadowToggle) shadowToggle.addEventListener('change', () => enableShadows(shadowToggle.checked));
@@ -696,6 +762,7 @@ async function setupBaseClip() {
         baseClip = new Cesium.ClippingPolygonCollection({ polygons, inverse: false });
         baseClip.enabled = true;
         baseTileset.clippingPolygons = baseClip;
+        render();
         console.log('[clip] base footprint clip ready (IFC twin always hidden)');
     } catch (e) {
         console.warn('[clip] base footprint setup failed — IFC twin may z-fight', e);
@@ -705,7 +772,321 @@ async function setupBaseClip() {
 // Toggle = hide ALL citydb buildings (not just the twin).
 if (hideBaseToggle) hideBaseToggle.addEventListener('change', () => {
     if (baseTileset) baseTileset.show = !hideBaseToggle.checked;
+    render();
 });
+
+// =====================================================================
+// 6d. CITY TIME MACHINE — reveal the city by building height
+//     ─────────────────────────────────────────────────────────────────
+//     Building Height Filter. Drives the reveal by measured building
+//     height (~90% coverage): drag or play the slider and buildings peel
+//     off shortest-first. Height is also a strong free proxy for building
+//     type, so the readout names the tallest visible typology band.
+//
+//     Non-destructive: no re-tiling. The base tiles already expose `gmlid`,
+//     so we fetch a {gmlid: height} map once (/api/building-heights) and
+//     toggle each feature's `.show` from the tileVisible callback. A
+//     `tmEverUsed` guard keeps it zero-cost until the user opens it; after
+//     that, every visible tile is reconciled each render pass so panning
+//     away and back never leaves a building wrongly hidden.
+// =====================================================================
+
+const tmToggle = document.getElementById('tmToggle');
+const tmSlider = document.getElementById('tmSlider');
+const tmLabel  = document.getElementById('tmLabel');
+const tmPlay   = document.getElementById('tmPlay');
+const tmReset  = document.getElementById('tmReset');
+const tmCount  = document.getElementById('tmCount');
+
+let tmActive    = false;
+let tmEverUsed  = false;
+let tmThreshold = Infinity;     // show buildings whose height ≤ threshold
+let tmHeights   = null;         // Map<gmlid, height-m>
+let tmSorted    = null;         // heights sorted asc, for fast live counts
+let tmMin = 0, tmMax = 100, tmTotal = 0;
+let tmPlaying = false, tmRaf = null;
+
+// Per-tile feature filter. Registered on baseTileset.tileVisible (section 6),
+// so it runs for visible tiles each render pass — covering tile streaming,
+// camera moves, and slider changes (which call render()).
+function tmApplyTile(tile) {
+    if (!tmEverUsed) return;            // zero cost until the feature is used
+    const apply = (content) => {
+        if (!content) return;
+        const n = content.featuresLength || 0;
+        for (let i = 0; i < n; i++) {
+            const f = content.getFeature(i);
+            if (!f) continue;
+            if (!tmActive) { f.show = true; continue; }
+            const h = tmHeights ? tmHeights.get(f.getProperty('gmlid')) : null;
+            f.show = (h == null) ? true : (h <= tmThreshold);
+        }
+    };
+    const c = tile.content;
+    if (c && c.innerContents) c.innerContents.forEach(apply);
+    else apply(c);
+}
+
+async function loadTimeMachineData() {
+    if (tmHeights) return true;
+    try {
+        const d = await (await fetch(`${API}/api/building-heights`)).json();
+        if (!d || !d.heights) throw new Error('no height data');
+        tmHeights = new Map(Object.entries(d.heights).map(([k, v]) => [k, +v]));
+        tmSorted  = Float64Array.from(tmHeights.values()).sort();
+        tmTotal   = d.count ?? tmHeights.size;
+        tmMin     = Math.max(0, Math.floor(d.min ?? 0));
+        tmMax     = Math.ceil(d.p99 ?? d.max ?? 100);   // cap at p99; outliers reveal at top
+        if (tmSlider) {
+            tmSlider.min   = tmMin;
+            tmSlider.max   = tmMax;
+            tmSlider.step  = Math.max(0.5, +((tmMax - tmMin) / 200).toFixed(2));
+            tmSlider.value = tmMax;
+        }
+        return true;
+    } catch (e) {
+        console.warn('[timeMachine] could not load building heights', e);
+        if (tmCount) tmCount.textContent = 'Height data unavailable (backend offline?)';
+        return false;
+    }
+}
+
+// Buildings with height ≤ t — binary search on the sorted height array.
+function tmCountBelow(t) {
+    if (!tmSorted) return 0;
+    if (t >= tmMax) return tmTotal;
+    let lo = 0, hi = tmSorted.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (tmSorted[m] <= t) lo = m + 1; else hi = m; }
+    return lo;
+}
+
+// Height is a strong free proxy for building type — name the tallest band
+// currently revealed so the count line carries meaning, not just a number.
+function tmBand(t) {
+    if (t <= 4)  return 'sheds & garages';
+    if (t <= 10) return 'houses & low-rise';
+    if (t <= 25) return 'apartment & office blocks';
+    return 'high-rise & towers';
+}
+
+function tmUpdateLabel() {
+    if (tmLabel) {
+        if (!tmActive) tmLabel.textContent = 'Showing buildings ≤ — m';
+        else tmLabel.textContent =
+            `Showing buildings ≤ ${tmThreshold >= tmMax ? 'full city' : tmThreshold.toFixed(1) + ' m'}`;
+    }
+    if (tmCount) {
+        if (!tmActive) { tmCount.textContent = ''; return; }
+        const shown = tmThreshold >= tmMax ? tmTotal : tmCountBelow(tmThreshold);
+        const band  = tmThreshold >= tmMax ? 'all types' : `up to ${tmBand(tmThreshold)}`;
+        tmCount.textContent =
+            `${shown.toLocaleString()} / ${tmTotal.toLocaleString()} buildings · ${band}`;
+    }
+}
+
+function tmRefresh() { render(); tmUpdateLabel(); }   // render() re-fires tileVisible
+
+function tmStepTo(v) {
+    tmThreshold = v;
+    if (tmSlider && Math.abs(parseFloat(tmSlider.value) - v) > 1e-6) tmSlider.value = v;
+    tmRefresh();
+}
+
+function tmStopPlay() {
+    tmPlaying = false;
+    if (tmRaf) cancelAnimationFrame(tmRaf);
+    tmRaf = null;
+    if (tmPlay) tmPlay.innerHTML = '<svg class="icon"><use href="#i-play"/></svg>Play';
+}
+
+function tmStartPlay() {
+    if (!tmActive) return;
+    tmPlaying = true;
+    if (tmPlay) tmPlay.innerHTML = '<svg class="icon"><use href="#i-pause"/></svg>Pause';
+    const to = tmMax, dur = 7000;
+    if (tmThreshold >= tmMax) tmThreshold = tmMin;       // replay from the ground
+    const fromVal = tmThreshold;
+    let start = null;
+    const frame = (ts) => {
+        if (!tmPlaying) return;
+        if (start == null) start = ts;
+        const p = Math.min(1, (ts - start) / dur);
+        tmStepTo(fromVal + (to - fromVal) * p);
+        if (p < 1) tmRaf = requestAnimationFrame(frame);
+        else tmStopPlay();
+    };
+    tmRaf = requestAnimationFrame(frame);
+}
+
+async function tmSetActive(on) {
+    if (on && !(await loadTimeMachineData())) { if (tmToggle) tmToggle.checked = false; return; }
+    tmActive = on;
+    if (on) tmEverUsed = true;
+    [tmSlider, tmPlay, tmReset].forEach(el => { if (el) el.disabled = !on; });
+    if (on) {
+        tmThreshold = tmSlider ? parseFloat(tmSlider.value) : tmMax;
+    } else {
+        tmStopPlay();
+        tmThreshold = Infinity;
+    }
+    tmRefresh();   // render() reconciles every visible tile to the new state
+}
+
+if (tmToggle) tmToggle.addEventListener('change', () => tmSetActive(tmToggle.checked));
+if (tmSlider) tmSlider.addEventListener('input', () => { tmStopPlay(); tmStepTo(parseFloat(tmSlider.value)); });
+if (tmPlay)   tmPlay.addEventListener('click', () => (tmPlaying ? tmStopPlay() : tmStartPlay()));
+if (tmReset)  tmReset.addEventListener('click', () => { tmStopPlay(); if (tmSlider) tmSlider.value = tmMax; tmStepTo(tmMax); });
+
+// =====================================================================
+// 6e. COLOR BUILDINGS BY — thematic shading of the citydb base city
+//     ─────────────────────────────────────────────────────────────────
+//     One engine, three data layers, all painted onto base 3D-tile
+//     features via the same baseTileset.tileVisible pass used by the
+//     height filter (§6d):
+//       · use    — ALKIS use category (7 classes), /api/building-themes
+//       · height — measured-height band (4 classes), reuses tmHeights (§6d)
+//       · solar  — estimated annual rooftop-PV yield (5 kWh quintiles),
+//                  /api/building-themes (model documented in build_building_themes.sql)
+//     Non-destructive & lazy: zero cost until a layer is chosen
+//     (colorEverUsed guard); the selected-feature highlight is preserved
+//     by skipping it while repainting.
+// =====================================================================
+
+const colorBy     = document.getElementById('colorBy');
+const colorLegend = document.getElementById('colorLegend');
+const colorStat   = document.getElementById('colorStat');
+
+// Palettes (hex for the legend; Cesium.Color built once for the render loop).
+const USE_HEX    = ['#5b8def', '#9b59b6', '#e67e22', '#7f8c8d', '#e84393', '#b8c2cc', '#dfe4ea'];
+const HEIGHT_HEX = ['#c7e9b4', '#7fcdbb', '#2c7fb8', '#253494'];
+const SOLAR_HEX  = ['#ffffcc', '#fed976', '#feb24c', '#fd8d3c', '#e31a1c'];
+const NODATA_HEX = '#cfd4da';
+
+const HEIGHT_LABELS = [
+    '≤ 4 m · sheds & garages',
+    '4–10 m · houses & low-rise',
+    '10–25 m · apartment & office blocks',
+    '> 25 m · high-rise & towers',
+];
+
+const toCol      = h => Cesium.Color.fromCssColorString(h);
+const CL_USE     = USE_HEX.map(toCol);
+const CL_HEIGHT  = HEIGHT_HEX.map(toCol);
+const CL_SOLAR   = SOLAR_HEX.map(toCol);
+const CL_NODATA  = toCol(NODATA_HEX);
+const CL_WHITE   = Cesium.Color.WHITE;
+
+let colorMode    = 'none';   // 'none' | 'use' | 'height' | 'solar'
+let colorEverUsed = false;
+let themeData    = null;     // { uses:{gmlid:code}, solar:{gmlid:kwh}, solar_breaks, use_labels, solar_total_gwh }
+
+async function loadThemeData() {
+    if (themeData) return true;
+    try {
+        const d = await (await fetch(`${API}/api/building-themes`)).json();
+        if (!d || !d.uses) throw new Error('no theme data');
+        themeData = d;
+        return true;
+    } catch (e) {
+        console.warn('[colorBy] could not load building themes', e);
+        if (colorStat) colorStat.textContent = 'Theme data unavailable (backend offline?)';
+        return false;
+    }
+}
+
+function heightBandIdx(h) { return h <= 4 ? 0 : h <= 10 ? 1 : h <= 25 ? 2 : 3; }
+
+function solarBinIdx(k) {
+    const b = themeData?.solar_breaks;
+    if (!b || b.length < 4) return 0;
+    return k < b[0] ? 0 : k < b[1] ? 1 : k < b[2] ? 2 : k < b[3] ? 3 : 4;
+}
+
+// Colour one base feature for the active layer (CL_NODATA when unclassified).
+function colorForFeature(f) {
+    const gmlid = f.getProperty('gmlid');
+    if (colorMode === 'use') {
+        const c = themeData?.uses?.[gmlid];
+        return (c == null) ? CL_NODATA : (CL_USE[c] || CL_NODATA);
+    }
+    if (colorMode === 'height') {
+        const h = tmHeights ? tmHeights.get(gmlid) : null;
+        return (h == null) ? CL_NODATA : CL_HEIGHT[heightBandIdx(h)];
+    }
+    if (colorMode === 'solar') {
+        const k = themeData?.solar?.[gmlid];
+        return (k == null) ? CL_NODATA : CL_SOLAR[solarBinIdx(k)];
+    }
+    return CL_WHITE;
+}
+
+// Per-tile painter, registered on baseTileset.tileVisible (section 6).
+function colorApplyTile(tile) {
+    if (!colorEverUsed) return;                 // zero cost until a layer is chosen
+    const apply = (content) => {
+        if (!content) return;
+        const n = content.featuresLength || 0;
+        for (let i = 0; i < n; i++) {
+            const f = content.getFeature(i);
+            if (!f) continue;
+            if (f === selected.feature) continue;   // keep the click highlight
+            f.color = (colorMode === 'none') ? CL_WHITE : colorForFeature(f);
+        }
+    };
+    const c = tile.content;
+    if (c && c.innerContents) c.innerContents.forEach(apply);
+    else apply(c);
+}
+
+function legendRow(hex, label) {
+    return `<div class="legend-row"><span class="legend-dot" style="background:${hex};"></span><span>${label}</span></div>`;
+}
+
+function renderColorLegend() {
+    if (!colorLegend) return;
+    let rows = '', stat = '';
+    if (colorMode === 'use') {
+        const labels = themeData?.use_labels || [];
+        rows = labels.map((lab, i) => legendRow(USE_HEX[i] || NODATA_HEX, lab)).join('')
+             + legendRow(NODATA_HEX, 'Unmapped');
+    } else if (colorMode === 'height') {
+        rows = CL_HEIGHT.map((_, i) => legendRow(HEIGHT_HEX[i], HEIGHT_LABELS[i])).join('');
+    } else if (colorMode === 'solar') {
+        const b = themeData?.solar_breaks || [];
+        const fmt = v => v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 0 : 1) + 'k' : String(v);
+        const labs = (b.length === 4)
+            ? [`< ${fmt(b[0])} kWh/yr`, `${fmt(b[0])}–${fmt(b[1])}`, `${fmt(b[1])}–${fmt(b[2])}`,
+               `${fmt(b[2])}–${fmt(b[3])}`, `> ${fmt(b[3])} kWh/yr`]
+            : ['Very low', 'Low', 'Moderate', 'High', 'Very high'];
+        rows = SOLAR_HEX.map((c, i) => legendRow(c, labs[i])).join('');
+        if (themeData?.solar_total_gwh != null) {
+            stat = `≈ ${(+themeData.solar_total_gwh).toLocaleString()} GWh/yr citywide rooftop potential`;
+            // Roof-resolved (real LoD2 pitch + orientation), shadow-adjusted.
+            const un = +themeData.solar_total_unshaded_gwh;
+            if (un > 0 && themeData.shadow_avg != null) {
+                const loss = (100 * (1 - themeData.solar_total_gwh / un)).toFixed(1);
+                stat += ` · roof-resolved, shadow-adjusted (−${loss}% from neighbour shading)`;
+            }
+        }
+    }
+    colorLegend.innerHTML = rows;
+    if (colorStat) colorStat.textContent = stat;
+}
+
+async function setColorMode(mode) {
+    // Load whatever the chosen layer needs; bail back to 'none' if it fails.
+    if (mode === 'use' || mode === 'solar') {
+        if (!(await loadThemeData())) { if (colorBy) colorBy.value = 'none'; mode = 'none'; }
+    } else if (mode === 'height') {
+        if (!(await loadTimeMachineData())) { if (colorBy) colorBy.value = 'none'; mode = 'none'; }
+    }
+    colorMode = mode;
+    if (mode !== 'none') colorEverUsed = true;
+    renderColorLegend();
+    render();   // re-fires tileVisible → repaints every visible base tile
+}
+
+if (colorBy) colorBy.addEventListener('change', () => setColorMode(colorBy.value));
 
 // ── Reset everything to the default view ──────────────────────────────
 document.getElementById('resetAll')?.addEventListener('click', () => {
@@ -722,6 +1103,9 @@ document.getElementById('resetAll')?.addEventListener('click', () => {
 
     if (baseTileset) baseTileset.show = true;   // (baseClip stays on — twin always hidden)
     if (hideBaseToggle) hideBaseToggle.checked = false;
+
+    if (colorBy) colorBy.value = 'none';
+    setColorMode('none');
 
     clearMeasurements();
     clearHighlight();

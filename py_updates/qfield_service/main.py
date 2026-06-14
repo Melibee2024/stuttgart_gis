@@ -107,6 +107,35 @@ def load_geopackages_to_postgis() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Rebuild views that depend on building_photos
+# --------------------------------------------------------------------------- #
+def recreate_dependent_views() -> None:
+    """
+    The ogr2ogr reload above uses OVERWRITE=YES, which issues DROP ... CASCADE on
+    building_photos — so it also drops every view that depends on it, notably
+    public.data_fusion_view (queried by the Cesium backend). Without rebuilding
+    them, the backend fails with
+    'relation "public.data_fusion_view" does not exist' and no building data or
+    photos appear in the viewer.
+
+    Runs the DDL via ogrinfo, which ships alongside ogr2ogr in the same GDAL
+    install, so this needs no extra dependency (psql / psycopg2).
+    """
+    sql_file = config.BASE_DIR / "sql" / "recreate_public_views.sql"
+    if not sql_file.exists():
+        log.warning("View-recreate SQL missing at %s — skipping.", sql_file)
+        return
+
+    ogrinfo = config.OGR2OGR.replace("ogr2ogr", "ogrinfo")
+    cmd = [ogrinfo, f"PG:{config.PG_CONN}", "-sql", f"@{sql_file}"]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        log.error("Failed to recreate dependent views:\n%s", result.stderr.strip())
+    else:
+        log.info("Dependent views recreated (public.data_fusion_view).")
+
+
+# --------------------------------------------------------------------------- #
 # Query the GeoPackage for photos actually referenced by features
 # --------------------------------------------------------------------------- #
 def get_referenced_photos() -> set[str]:
@@ -245,6 +274,9 @@ def main() -> None:
                     # Geometry comes from the package (small, fast).
                     qfc.download_geometry_from_package()
                     load_geopackages_to_postgis()
+                    # OVERWRITE=YES above cascade-drops dependent views; rebuild
+                    # them so the Cesium backend keeps working.
+                    recreate_dependent_views()
 
                     # Find which photos are actually referenced in the GeoPackage.
                     # This is the ground truth: deleted features won't appear here.

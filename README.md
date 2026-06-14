@@ -111,7 +111,19 @@ cd cesium_web\stuttgart-digital-twin && npm install
 cd py_updates\qfield_service && pip install python-dotenv qfieldcloud-sdk
 ```
 
-### 3. Regenerate LoD2 3D Tiles (if `tiles_citydb/` is missing)
+### 3. Create database views and helper objects
+The selective `pg_dump` migration only carries the `stuttgart_2d`,
+`stuttgart_processed`, `qfield_data`, and `citydb` schemas — anything in the
+fresh `public` schema (notably the `public.data_fusion_view` the backend
+queries) and the `nexus3d` base-tile schema must be (re)created from
+`nexus3d_setup.sql`. Skipping this causes the backend to fail with
+`relation "public.data_fusion_view" does not exist` and no building data/photos
+in the viewer.
+```powershell
+psql "service=hft_db" -f cesium_web\stuttgart-backend\nexus3d_setup.sql
+```
+
+### 4. Regenerate LoD2 3D Tiles (if `tiles_citydb/` is missing)
 The tile folder is gitignored — regenerate it from the database:
 ```powershell
 pg2b3dm -h localhost -p 5432 -d hft_db -U postgres `

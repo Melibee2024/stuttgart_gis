@@ -18,6 +18,13 @@ app.use('/media', express.static('media'));
 app.use('/tiles', express.static('public/tiles'));
 app.use('/tiles_citydb', express.static('public/tiles_citydb'));   // full-city LoD2 base
 
+// Serve the built CesiumJS frontend so everything lives on ONE origin (port
+// 5000). This lets a single tunnel (Cloudflare/ngrok) expose the whole app —
+// the frontend then calls /api, /media, /tiles relative to the same host.
+// Build it first: `npm run build` in ../stuttgart-digital-twin (with an EMPTY
+// VITE_API_BASE so requests are same-origin).
+app.use(express.static(path.join(__dirname, '..', 'stuttgart-digital-twin', 'dist')));
+
 
 // ─── DB CONNECTION ────────────────────────────────────────────────────────────
 if (!process.env.DB_PASSWORD) {
@@ -494,6 +501,104 @@ app.get('/api/qfield/:gmlid', async (req, res) => {
 });
 
 
+// ─── GET /api/building-heights ────────────────────────────────────────────────
+// Drives the "City Time Machine" skyline reveal. Returns a per-building height
+// map so the frontend can show/hide buildings below a height threshold.
+//
+// NOTE: citydb.building.year_of_construction is 100% NULL in this model (and
+// ALKIS carries no construction date), so a literal construction-year timeline
+// is impossible. measured_height, however, is populated for ~90% of buildings,
+// and ST_ZMax-ST_ZMin of each tiled base geometry gives the exact rendered
+// height with no extra join — so the reveal axis is building height (the +54 m
+// terrain shift on geom cancels out in the difference).
+//
+// Keyed by gmlid (the same property the base 3D-tiles expose per feature), so
+// the frontend can match a clicked/visible tile feature straight to its height.
+// Aggregated MAX per gmlid: a multi-part building appears once the slider
+// reaches its tallest part.
+//
+// Response: { count, min, max, p99, heights: { "<gmlid>": <metres> } }
+//   p99 is the 99th-percentile height — the frontend caps the slider there so a
+//   few tall outliers don't make the usable range unusable; values above p99
+//   reveal at the slider's top ("all").
+app.get('/api/building-heights', async (_req, res) => {
+    try {
+        const { rows } = await pool.query(`
+            WITH h AS (
+                SELECT gmlid,
+                       MAX(ST_ZMax(geom) - ST_ZMin(geom)) AS hgt
+                FROM nexus3d.citydb_base_tiles
+                WHERE geom IS NOT NULL
+                GROUP BY gmlid
+            )
+            SELECT
+                (SELECT count(*)::int FROM h)                                       AS count,
+                (SELECT round(min(hgt)::numeric, 1) FROM h)                         AS min,
+                (SELECT round(max(hgt)::numeric, 1) FROM h)                         AS max,
+                (SELECT round(percentile_cont(0.99) WITHIN GROUP (ORDER BY hgt)::numeric, 1) FROM h) AS p99,
+                (SELECT jsonb_object_agg(gmlid, round(hgt::numeric, 1)) FROM h)     AS heights;
+        `);
+        return res.json(rows[0]);
+    } catch (err) {
+        console.error('[DB ERROR] /api/building-heights', err.message);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+
+// ─── GET /api/building-themes ──────────────────────────────────────────────────
+// Powers the "Color by" thematic layers (use category + rooftop-solar potential)
+// in the 3D-City viewer. Reads the precomputed nexus3d.building_themes lookup
+// (built once by build_building_themes.sql — ~25 s; this read is <10 ms), so the
+// per-building footprint/area/solar maths never runs on the request path.
+//
+// Returns parallel {gmlid → value} maps the frontend matches straight onto base
+// 3D-tile features:
+//   uses   — use_code 0..6 (see use_labels / build_building_themes.sql)
+//   solar  — SHADOW-ADJUSTED annual rooftop-PV yield, kWh (kwh × shadow_factor,
+//            computed by build_solar_shadow.mjs; falls back to raw kwh if that
+//            build hasn't been run yet)
+//   solar_breaks    — kWh quintile cut points [b20,b40,b60,b80] for 5-class shading
+//   solar_total_gwh — citywide shadow-adjusted potential (headline stat)
+//   solar_total_unshaded_gwh / shadow_avg — for the "−X% from shading" readout
+app.get('/api/building-themes', async (_req, res) => {
+    try {
+        const { rows } = await pool.query(`
+            WITH t AS (
+                SELECT gmlid, use_code,
+                       COALESCE(kwh_roof, kwh)      AS kwh_pre,    -- roof-resolved, pre-shadow
+                       COALESCE(kwh_shaded, kwh)    AS kwh_eff,    -- final (× shadow), served
+                       COALESCE(shadow_factor, 1.0) AS shadow_factor
+                FROM nexus3d.building_themes
+            )
+            SELECT
+                count(*)::int                              AS count,
+                round(sum(kwh_eff)::numeric / 1e6, 1)      AS solar_total_gwh,
+                round(sum(kwh_pre)::numeric / 1e6, 1)      AS solar_total_unshaded_gwh,
+                round(avg(shadow_factor)::numeric, 3)      AS shadow_avg,
+                ARRAY[
+                    percentile_cont(0.2) WITHIN GROUP (ORDER BY kwh_eff),
+                    percentile_cont(0.4) WITHIN GROUP (ORDER BY kwh_eff),
+                    percentile_cont(0.6) WITHIN GROUP (ORDER BY kwh_eff),
+                    percentile_cont(0.8) WITHIN GROUP (ORDER BY kwh_eff)
+                ]::int[]                                   AS solar_breaks,
+                jsonb_object_agg(gmlid, use_code)          AS uses,
+                jsonb_object_agg(gmlid, kwh_eff)           AS solar
+            FROM t;
+        `);
+        const out = rows[0] ?? {};
+        out.use_labels = [
+            'Residential', 'Mixed-use', 'Commercial / Office', 'Industrial',
+            'Public / Civic', 'Ancillary', 'Other / Unknown',
+        ];
+        return res.json(out);
+    } catch (err) {
+        console.error('[DB ERROR] /api/building-themes', err.message);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+
 // ─── START ────────────────────────────────────────────────────────────────────
 const PORT = Number(process.env.PORT) || 5000;
 app.listen(PORT, () => {
@@ -506,6 +611,8 @@ app.listen(PORT, () => {
     console.log('  GET  /api/buildings/geojson[?ifc_class=&storey=]');
     console.log('  GET  /api/buildings[?ifc_class=&storey=]');
     console.log('  GET  /api/buildings/:globalid');
+    console.log('  GET  /api/building-heights');
+    console.log('  GET  /api/building-themes');
     console.log('  GET  /api/tiles/status');
     console.log('  POST /api/regenerate-tiles');
     console.log('══════════════════════════════════════════════');
