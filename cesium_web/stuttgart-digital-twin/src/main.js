@@ -126,6 +126,7 @@ function applyIfcStyle() {
 
 let ifcTileset  = null;
 let baseTileset = null;   // citydb LoD2 (ion 96188) — module-level for shadows/modes
+let bau4Tileset = null;   // citydb LoD2 box for Bau4 only — the BIM-swap counterpart
 
 async function loadIfcTileset(ifcClass = null, storey = null) {
     try {
@@ -279,6 +280,21 @@ function flyToIfc(duration = 1.5) {
         console.warn('⚠ citydb base tileset not available:', e.message ?? e);
     }
 
+    // Bau4's citydb LoD2 box as its own small tileset (the full city base no
+    // longer contains Bau4 — it was removed so the IFC wouldn't z-fight). Shown
+    // by default and clickable for QField photos; hidden when the BIM swap
+    // toggle reveals the detailed IFC instead.
+    try {
+        bau4Tileset = await Cesium.Cesium3DTileset.fromUrl(
+            `${API}/tiles_citydb_bau4/tileset.json`, { maximumScreenSpaceError: 16 }
+        );
+        tunePerformance(bau4Tileset);
+        viewer.scene.primitives.add(bau4Tileset);
+        console.log('✅ Bau4 citydb box tileset loaded');
+    } catch (e) {
+        console.warn('⚠ Bau4 citydb box tileset not available:', e.message ?? e);
+    }
+
     try {
         await loadFilters();
         populateLegend();
@@ -287,8 +303,9 @@ function flyToIfc(duration = 1.5) {
         await flyToIfc();
 
         await initModeTools();   // slicer range + shadow defaults
-        await setupBaseClip();   // clip the citydb twin sitting under the IFC
-        setMode('ifc');          // start in IFC mode
+        await setupBaseClip();   // legacy footprint clip on the full-city base (harmless no-op now)
+        setBimSwap(false);       // default: show citydb Bau4 box (IFC hidden) → clickable for QField photos
+        setMode('ifc');          // IFC-mode panel/tools; reveal the BIM via the Visibility toggle
 
         console.log('✅ Nexus3D ready.');
     } catch (e) {
@@ -775,6 +792,20 @@ if (hideBaseToggle) hideBaseToggle.addEventListener('change', () => {
     render();
 });
 
+// ── BIM swap (Bau4) ───────────────────────────────────────────────────
+// Bau4 exists as two separate tilesets: the citydb LoD2 box (bau4Tileset) and
+// the detailed IFC (ifcTileset). Exactly one is shown. OFF (default) = citydb
+// box, clickable to view/attach QField photos; ON = detailed BIM model.
+const bimSwapToggle = document.getElementById('bimSwapToggle');
+
+function setBimSwap(on) {
+    if (ifcTileset)  ifcTileset.show  = on;
+    if (bau4Tileset) bau4Tileset.show = !on;
+    render();
+}
+
+if (bimSwapToggle) bimSwapToggle.addEventListener('change', () => setBimSwap(bimSwapToggle.checked));
+
 // =====================================================================
 // 6d. CITY TIME MACHINE — reveal the city by building height
 //     ─────────────────────────────────────────────────────────────────
@@ -1101,8 +1132,10 @@ document.getElementById('resetAll')?.addEventListener('click', () => {
     enableShadows(false);
     const st = document.getElementById('shadowToggle'); if (st) st.checked = false;
 
-    if (baseTileset) baseTileset.show = true;   // (baseClip stays on — twin always hidden)
+    if (baseTileset) baseTileset.show = true;
     if (hideBaseToggle) hideBaseToggle.checked = false;
+    if (bimSwapToggle) bimSwapToggle.checked = false;
+    setBimSwap(false);                          // default: citydb Bau4 shown, IFC hidden
 
     if (colorBy) colorBy.value = 'none';
     setColorMode('none');
@@ -1202,3 +1235,44 @@ function handleMeasureClick(windowPos) {
 document.getElementById('btnDist')?.addEventListener('click', () => startMeasure('distance'));
 document.getElementById('btnHeight')?.addEventListener('click', () => startMeasure('height'));
 document.getElementById('btnClearTools')?.addEventListener('click', clearMeasurements);
+
+// =====================================================================
+// 11. RESIZABLE SIDEBARS
+//     Drag the thin handle on the inner edge of either sidebar to resize.
+//     The map fills the remaining space (flex), so we just resize the
+//     sidebar and tell Cesium to recompute its canvas.
+// =====================================================================
+
+function makeResizable(handle, panel, { side, min, max }) {
+    if (!handle || !panel) return;
+
+    handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const startWidth = panel.getBoundingClientRect().width;
+        handle.classList.add('is-dragging');
+        document.body.style.cursor = 'ew-resize';
+        document.body.style.userSelect = 'none';
+
+        const onMove = (ev) => {
+            const dx = ev.clientX - startX;
+            const delta = side === 'left' ? dx : -dx;
+            const width = Math.min(max, Math.max(min, startWidth + delta));
+            panel.style.width = `${width}px`;
+            viewer.resize();
+            render();
+        };
+        const onUp = () => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            handle.classList.remove('is-dragging');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+}
+
+makeResizable(document.getElementById('resize-left'),  document.getElementById('left-sidebar'),  { side: 'left',  min: 230, max: 520 });
+makeResizable(document.getElementById('resize-right'), document.getElementById('right-sidebar'), { side: 'right', min: 300, max: 680 });

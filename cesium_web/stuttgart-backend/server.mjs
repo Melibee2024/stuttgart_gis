@@ -17,6 +17,7 @@ app.use(express.json());
 app.use('/media', express.static('media'));
 app.use('/tiles', express.static('public/tiles'));
 app.use('/tiles_citydb', express.static('public/tiles_citydb'));   // full-city LoD2 base
+app.use('/tiles_citydb_bau4', express.static('public/tiles_citydb_bau4'));  // Bau4 LoD2 box (swap target)
 
 // Serve the built CesiumJS frontend so everything lives on ONE origin (port
 // 5000). This lets a single tunnel (Cloudflare/ngrok) expose the whole app —
@@ -177,7 +178,19 @@ app.get('/api/georef/:objectid', async (req, res) => {
 
 let tileRegenRunning = false;
 
-app.post('/api/regenerate-tiles', async (_req, res) => {
+app.post('/api/regenerate-tiles', async (req, res) => {
+    // SECURITY: this endpoint spawns a shell process (pg2b3dm). When the server
+    // is reachable from the LAN/internet it must NOT be triggerable by remote
+    // clients — allow only loopback (the operator on this machine).
+    const ip = req.ip || req.socket?.remoteAddress || '';
+    const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+    if (!isLocal) {
+        return res.status(403).json({
+            success: false,
+            error:   'Forbidden: tile regeneration is local-only.',
+        });
+    }
+
     if (tileRegenRunning) {
         return res.status(409).json({
             success: false,

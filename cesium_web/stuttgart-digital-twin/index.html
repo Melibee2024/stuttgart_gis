@@ -133,6 +133,23 @@
             box-shadow: var(--shadow-lg);
         }
 
+        /* Drag handles for resizable sidebars */
+        .resize-handle {
+            flex-shrink: 0;
+            width: 6px;
+            cursor: ew-resize;
+            background: transparent;
+            z-index: 16;
+            transition: background .15s;
+        }
+        .resize-handle:hover, .resize-handle.is-dragging {
+            background: var(--accent);
+            opacity: .35;
+        }
+        .resize-handle--right {
+            position: absolute; left: 0; top: 0; bottom: 0;
+        }
+
         /* Custom scrollbar */
         .sidebar__scroll::-webkit-scrollbar { width: 10px; }
         .sidebar__scroll::-webkit-scrollbar-thumb {
@@ -585,6 +602,10 @@
                     <div class="card group">
                         <h2><svg class="icon"><use href="#i-eye"/></svg>Visibility</h2>
                         <div class="toggle-row">
+                            <label class="field-label" for="bimSwapToggle">Detailed BIM model (Bau4)</label>
+                            <input type="checkbox" id="bimSwapToggle">
+                        </div>
+                        <div class="toggle-row">
                             <label class="field-label" for="hideBaseToggle">Hide citydb buildings</label>
                             <input type="checkbox" id="hideBaseToggle">
                         </div>
@@ -663,6 +684,9 @@
             </footer>
         </aside>
 
+        <!-- Drag handle: resize the left sidebar -->
+        <div class="resize-handle" id="resize-left" role="separator" aria-orientation="vertical" aria-label="Resize controls panel"></div>
+
         <!-- ── MAP ──────────────────────────────────────────────────────── -->
         <main id="cesiumContainer">
             <div id="loadingOverlay">Loading IFC elements…</div>
@@ -670,6 +694,7 @@
 
         <!-- ── RIGHT SIDEBAR ────────────────────────────────────────────── -->
         <aside id="right-sidebar" class="sidebar" aria-label="Asset profile">
+            <div class="resize-handle resize-handle--right" id="resize-right" role="separator" aria-orientation="vertical" aria-label="Resize asset profile panel"></div>
             <div class="panel-head">
                 <h2><svg class="icon"><use href="#i-landmark"/></svg>Asset Profile</h2>
                 <button id="closeSidebar" aria-label="Close panel"><svg class="icon"><use href="#i-x"/></svg></button>
