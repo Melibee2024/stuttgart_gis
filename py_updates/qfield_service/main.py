@@ -33,6 +33,38 @@ log = logging.getLogger("qfc_sync.main")
 
 
 # --------------------------------------------------------------------------- #
+# Detect which layer inside a GeoPackage holds the photo records
+# --------------------------------------------------------------------------- #
+def find_photo_layer(gpkg: Path) -> str | None:
+    """
+    QField exports GeoPackages with hash-based table names that change every
+    sync cycle.  Scan the GeoPackage for the ONE table that has a 'file_path'
+    or 'photo_name' column — that is the building_photos layer regardless of
+    its internal hash name.
+
+    Returns the table name (the source layer for ogr2ogr), or None if not found.
+    """
+    try:
+        con = sqlite3.connect(str(gpkg))
+        cur = con.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [r[0] for r in cur.fetchall()]
+        for table in tables:
+            try:
+                cur.execute(f'PRAGMA table_info("{table}")')
+                cols = {r[1] for r in cur.fetchall()}
+                if "file_path" in cols or "photo_name" in cols:
+                    con.close()
+                    return table
+            except Exception:
+                continue
+        con.close()
+    except Exception as exc:
+        log.warning("Could not inspect %s for photo layer: %s", gpkg.name, exc)
+    return None
+
+
+# --------------------------------------------------------------------------- #
 # Load GeoPackages into PostGIS
 # --------------------------------------------------------------------------- #
 def load_geopackages_to_postgis() -> None:
@@ -42,13 +74,26 @@ def load_geopackages_to_postgis() -> None:
         return
 
     for gpkg in gpkgs:
-        log.info("Loading %s into PostGIS (schema %s) ...", gpkg.name, config.PG_SCHEMA)
+        # Detect the hash-named layer that contains photo records, so we can:
+        #   a) load ONLY that layer (skip the other auxiliary hash tables), and
+        #   b) rename it to "building_photos" in PostGIS via -nln.
+        source_layer = find_photo_layer(gpkg)
+        if source_layer is None:
+            log.warning("No photo layer found in %s — skipping.", gpkg.name)
+            continue
+
+        log.info(
+            "Loading %s (layer: %s) into PostGIS as 'building_photos' (schema %s) ...",
+            gpkg.name, source_layer[:16] + "...", config.PG_SCHEMA,
+        )
         cmd = [
             config.OGR2OGR,
             "-f", "PostgreSQL",
             f"PG:{config.PG_CONN}",
             str(gpkg),
-            "-overwrite",                 # idempotent: replaces the table each cycle
+            source_layer,                 # load ONLY the photo layer (not all layers)
+            "-nln", "building_photos",    # always name it 'building_photos' in PostGIS
+            "-lco", "OVERWRITE=YES",      # idempotent: replaces the table each cycle
             "-lco", f"SCHEMA={config.PG_SCHEMA}",
             "-lco", "GEOMETRY_NAME=geom",
             "-lco", "FID=id",
@@ -58,7 +103,36 @@ def load_geopackages_to_postgis() -> None:
         if result.returncode != 0:
             log.error("ogr2ogr failed on %s:\n%s", gpkg.name, result.stderr.strip())
         else:
-            log.info("OK: %s loaded.", gpkg.name)
+            log.info("OK: building_photos loaded (%s).", gpkg.name)
+
+
+# --------------------------------------------------------------------------- #
+# Rebuild views that depend on building_photos
+# --------------------------------------------------------------------------- #
+def recreate_dependent_views() -> None:
+    """
+    The ogr2ogr reload above uses OVERWRITE=YES, which issues DROP ... CASCADE on
+    building_photos — so it also drops every view that depends on it, notably
+    public.data_fusion_view (queried by the Cesium backend). Without rebuilding
+    them, the backend fails with
+    'relation "public.data_fusion_view" does not exist' and no building data or
+    photos appear in the viewer.
+
+    Runs the DDL via ogrinfo, which ships alongside ogr2ogr in the same GDAL
+    install, so this needs no extra dependency (psql / psycopg2).
+    """
+    sql_file = config.BASE_DIR / "sql" / "recreate_public_views.sql"
+    if not sql_file.exists():
+        log.warning("View-recreate SQL missing at %s — skipping.", sql_file)
+        return
+
+    ogrinfo = config.OGR2OGR.replace("ogr2ogr", "ogrinfo")
+    cmd = [ogrinfo, f"PG:{config.PG_CONN}", "-sql", f"@{sql_file}"]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        log.error("Failed to recreate dependent views:\n%s", result.stderr.strip())
+    else:
+        log.info("Dependent views recreated (public.data_fusion_view).")
 
 
 # --------------------------------------------------------------------------- #
@@ -200,6 +274,9 @@ def main() -> None:
                     # Geometry comes from the package (small, fast).
                     qfc.download_geometry_from_package()
                     load_geopackages_to_postgis()
+                    # OVERWRITE=YES above cascade-drops dependent views; rebuild
+                    # them so the Cesium backend keeps working.
+                    recreate_dependent_views()
 
                     # Find which photos are actually referenced in the GeoPackage.
                     # This is the ground truth: deleted features won't appear here.
