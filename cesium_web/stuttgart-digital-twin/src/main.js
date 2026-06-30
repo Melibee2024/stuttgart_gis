@@ -136,7 +136,7 @@ async function loadIfcTileset(ifcClass = null, storey = null) {
         }
 
         ifcTileset = await Cesium.Cesium3DTileset.fromUrl(
-            `${API}/tiles/tileset.json`,
+            `${import.meta.env.BASE_URL}tiles/tileset.json`,   // bundled in public/ — served relative to the Pages base path
             { maximumScreenSpaceError: 16 }
         );
         tunePerformance(ifcTileset);   // detailed building stays sharp (SSE 16)
@@ -263,8 +263,8 @@ function flyToIfc(duration = 1.5) {
     // Replaces the partial ion asset so every building shows. Geoid-shifted in
     // the DB view, so it rests on the terrain.
     try {
-        baseTileset = await Cesium.Cesium3DTileset.fromUrl(
-            `${API}/tiles_citydb/tileset.json`, { maximumScreenSpaceError: 16 }
+        baseTileset = await Cesium.Cesium3DTileset.fromIonAssetId(
+            5007195, { maximumScreenSpaceError: 16 }   // full 40k-building LoD2 base, hosted on Cesium ion
         );
         tunePerformance(baseTileset, { aggressive: true });  // 40k-building city base
         viewer.scene.primitives.add(baseTileset);
@@ -286,7 +286,7 @@ function flyToIfc(duration = 1.5) {
     // toggle reveals the detailed IFC instead.
     try {
         bau4Tileset = await Cesium.Cesium3DTileset.fromUrl(
-            `${API}/tiles_citydb_bau4/tileset.json`, { maximumScreenSpaceError: 16 }
+            `${import.meta.env.BASE_URL}tiles_citydb_bau4/tileset.json`, { maximumScreenSpaceError: 16 }
         );
         tunePerformance(bau4Tileset);
         viewer.scene.primitives.add(bau4Tileset);
