@@ -29,6 +29,14 @@ jobs:
         with:
           node-version: 20
       - run: npm ci
+      - name: Fetch city-base tiles (from GitHub Release — kept out of git history)
+        run: |
+          curl -fL -o tiles_citydb.zip \
+            "https://github.com/Melibee2024/stuttgart_gis/releases/download/tiles-v1/tiles_citydb.zip"
+          mkdir -p public/tiles_citydb
+          unzip -q tiles_citydb.zip -d public/tiles_citydb
+          rm tiles_citydb.zip
+          test -f public/tiles_citydb/tileset.json && echo "✓ city base ready"
       - run: npm run build
         env:
           # Restricted, read-only Cesium ion token (must allow asset 5007195 +

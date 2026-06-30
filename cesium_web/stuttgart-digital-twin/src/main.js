@@ -263,8 +263,10 @@ function flyToIfc(duration = 1.5) {
     // Replaces the partial ion asset so every building shows. Geoid-shifted in
     // the DB view, so it rests on the terrain.
     try {
-        baseTileset = await Cesium.Cesium3DTileset.fromIonAssetId(
-            5007195, { maximumScreenSpaceError: 16 }   // full 40k-building LoD2 base, hosted on Cesium ion
+        baseTileset = await Cesium.Cesium3DTileset.fromUrl(
+            // full 40k-building LoD2 base — fetched from the GitHub Release into
+            // public/ at build time (kept out of git history), served same-origin.
+            `${import.meta.env.BASE_URL}tiles_citydb/tileset.json`, { maximumScreenSpaceError: 16 }
         );
         tunePerformance(baseTileset, { aggressive: true });  // 40k-building city base
         viewer.scene.primitives.add(baseTileset);
