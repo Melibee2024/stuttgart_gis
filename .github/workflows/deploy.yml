@@ -42,6 +42,9 @@ jobs:
           # Restricted, read-only Cesium ion token (must allow asset 5007195 +
           # World Terrain). Stored as a repo secret, never committed.
           VITE_ION_TOKEN: ${{ secrets.VITE_ION_TOKEN }}
+          # Point all /api and /media calls at the site itself, so they resolve to
+          # the bundled static snapshot (public/api, public/media) — no backend.
+          VITE_API_BASE: /stuttgart_gis
       - uses: actions/upload-pages-artifact@v3
         with:
           path: cesium_web/stuttgart-digital-twin/dist

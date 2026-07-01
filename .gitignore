@@ -57,6 +57,9 @@ cesium_web/**/build/
 cesium_web/**/dist/
 cesium_web/**/.cache/
 cesium_web/stuttgart-backend/public/tiles/
+# City base is fetched from the GitHub Release at CI-build time and copied here
+# locally for dev — never commit it (keeps the repo lean).
+cesium_web/stuttgart-digital-twin/public/tiles_citydb/
 media/img/*
 
 # Cesium library (already correct but extended safety)

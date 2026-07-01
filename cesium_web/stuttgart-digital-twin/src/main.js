@@ -487,25 +487,55 @@ function populateFeatureSummary(feature) {
 
 let lastRecord = null;   // cache so mode switches can re-render without re-fetching
 
+// ── Data access: live backend in dev, bundled static snapshot on GitHub Pages ──
+// Singleton datasets (filters/heights/themes/georef) resolve to static files via
+// VITE_API_BASE. The per-building records below come from bundled snapshot indexes
+// when there's no backend (import.meta.env.PROD), so a public visitor sees real
+// data instead of a "backend down" error.
+let _buildingsIdx = null, _qfieldIdx = null;
+async function _snapshotIdx(name) {
+    try {
+        const r = await fetch(`${import.meta.env.BASE_URL}api/_${name}.json`);
+        return r.ok ? await r.json() : {};
+    } catch { return {}; }
+}
+async function lookupBuilding(globalId) {
+    if (import.meta.env.PROD) {
+        _buildingsIdx ??= await _snapshotIdx('buildings');
+        return _buildingsIdx[globalId] ?? null;
+    }
+    const res = await fetch(`${API}/api/buildings/${globalId}`);
+    return res.ok ? await res.json() : null;
+}
+async function lookupQfield(id) {
+    if (import.meta.env.PROD) {
+        _qfieldIdx ??= await _snapshotIdx('qfield');
+        return _qfieldIdx[id] ?? null;
+    }
+    const res = await fetch(`${API}/api/qfield/${encodeURIComponent(id)}`);
+    return res.ok ? await res.json() : null;
+}
+const noFieldData = (msg) => `
+    <div style="background:#f6f8fa;border:1px solid #e4e9ef;padding:11px;border-radius:10px;">
+        <p style="color:#69788a;font-style:italic;margin:0;">${msg}</p>
+    </div>`;
+
 async function fetchDatabaseRecord(globalId) {
     qfieldDataContainer.innerHTML =
-        '<p style="color:#b45309;text-align:center;">⏳ Querying PostGIS…</p>';
+        '<p style="color:#b45309;text-align:center;">⏳ Loading building…</p>';
     try {
-        const res = await fetch(`${API}/api/buildings/${globalId}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        lastRecord = await res.json();
+        const rec = await lookupBuilding(globalId);
+        if (!rec) {
+            lastRecord = null;
+            qfieldDataContainer.innerHTML = noFieldData('No detailed record for this element in the public demo.');
+            return;
+        }
+        lastRecord = rec;
         renderProfile(lastRecord);
     } catch (err) {
-        console.error('API Fetch Error:', err);
+        console.error('Building fetch error:', err);
         lastRecord = null;
-        qfieldDataContainer.innerHTML = `
-            <div style="background:rgba(220,38,38,.06);border:1px solid #dc2626;
-                        padding:10px;border-radius:4px;">
-                <p style="color:#dc2626;margin:0 0 5px;"><strong>Database connection failed.</strong></p>
-                <p style="font-size:.8rem;color:#475467;margin:0;">
-                    Ensure the Node.js backend (${API}) is running.
-                </p>
-            </div>`;
+        qfieldDataContainer.innerHTML = noFieldData('Building details are unavailable right now.');
     }
 }
 
@@ -518,22 +548,23 @@ async function fetchQfieldRecord(gmlid) {
     qfieldDataContainer.innerHTML =
         '<p style="color:#b45309;text-align:center;">⏳ Querying QField data…</p>';
     try {
-        const res = await fetch(`${API}/api/qfield/${encodeURIComponent(gmlid)}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        lastRecord = await res.json();
+        const rec = await lookupQfield(gmlid);
+        if (!rec) {
+            lastRecord = null;
+            alkisTableBody.innerHTML =
+                `<tr><th>citydb GML</th><td>${gmlid}</td></tr>` +
+                '<tr><th>Field survey</th><td>Not surveyed</td></tr>';
+            qfieldDataContainer.innerHTML = noFieldData('No field-survey data recorded for this building.');
+            return;
+        }
+        lastRecord = rec;
         lastRecord.__base = true;
         populateBaseSummary(lastRecord);
         renderProfile(lastRecord);
     } catch (err) {
         console.error('QField fetch error:', err);
         lastRecord = null;
-        alkisTableBody.innerHTML =
-            '<tr><td colspan="2" style="color:#dc2626;">Failed to load building data.</td></tr>';
-        qfieldDataContainer.innerHTML = `
-            <div style="background:rgba(220,38,38,.06);border:1px solid #dc2626;
-                        padding:10px;border-radius:4px;">
-                <p style="color:#dc2626;margin:0;"><strong>Could not reach the backend (${API}).</strong></p>
-            </div>`;
+        qfieldDataContainer.innerHTML = noFieldData('Field data is unavailable right now.');
     }
 }
 
